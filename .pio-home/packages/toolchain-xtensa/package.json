@@ -1,0 +1,22 @@
+{
+  "name": "toolchain-xtensa",
+  "version": "2.100300.220621",
+  "description": "GCC Toolchain for Xtensa processor",
+  "keywords": [
+    "build tools",
+    "compiler",
+    "assembler",
+    "linker",
+    "preprocessor",
+    "esp8266"
+  ],
+  "license": "GPL-2.0-or-later",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/earlephilhower/esp-quick-toolchain"
+  },
+  "system": [
+    "darwin_x86_64",
+    "darwin_arm64"
+  ]
+}

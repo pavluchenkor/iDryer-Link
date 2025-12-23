@@ -1,0 +1,1 @@
+{"name": "tool-esptool", "version": "1.413.0", "description": "Espressif ESP8266 build/flash helper tool", "keywords": ["tools", "build tools", "uploader", "esp8266"], "license": "GPL-2.0-or-later", "system": ["darwin_x86_64", "darwin_arm64"], "repository": {"type": "git", "url": "https://github.com/igrr/esptool-ck"}}
