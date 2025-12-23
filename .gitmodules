@@ -1,0 +1,3 @@
+[submodule "lib/idryer-protocol"]
+	path = lib/idryer-protocol
+	url = https://github.com/pavluchenkor/idryer-protocol.git
