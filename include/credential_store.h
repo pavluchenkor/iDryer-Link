@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Arduino.h>
+#include <Preferences.h>
 #include "device_identity.h"
 
 class CredentialStore {
@@ -11,6 +12,6 @@ class CredentialStore {
   void clear();
 
  private:
-  static constexpr const char *kPath = "/device_identity.json";
-  bool mounted_ = false;
+  static constexpr const char *kNamespace = "idryer";
+  Preferences prefs_;
 };

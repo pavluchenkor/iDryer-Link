@@ -132,131 +132,66 @@
 4. **Валидация данных**: backend режет любые поля, которых нет в DTO (глобальный `ValidationPipe` в `backend/src/main.ts:39-64`). Следите, чтобы типы и диапазоны совпадали со схемой.
 5. **Сохранение параметров**: храните `deviceId`, `token`, последнюю известную `targetTemperature/Duration`, чтобы после перезагрузки вернуться в корректный режим и продолжить отчёт (`elapsedTime` можно восстановить из RTC).
 
-## 4. UART RP2040 ↔ ESP8266
-ESP8266 выступает сетевым мостом и связывается с RP2040 только по UART. Канал используется для всех аппаратных команд, поэтому протокол строго регламентирован.
+## 4. UART протокол (RP2040 ↔ ESP32)
 
-### 4.1 Физический уровень и пины
-- **Скорость:** 115200 бод, 8N1, без аппаратного контроля потока.
-- **Буферизация:** обе стороны содержат очередь исходящих кадров и ожидают подтверждение с тем же `sequence`.
-- **GPIO-сопоставление:**
+ESP32 выступает сетевым мостом и связывается с RP2040 по UART (115200 бод, 8N1). Канал используется для передачи телеметрии, команд и конфигурации.
 
-| Сигнал | RP2040 | ESP8266 | Комментарий |
-| --- | --- | --- | --- |
-| UART TX → RX | GPIO0 (UART0 TX) | GPIO3 (RX0) | RP2040 → ESP (телеметрия, Ack) |
-| UART RX ← TX | GPIO1 (UART0 RX) | GPIO1 (TX0) | ESP → RP2040 (команды, конфигурация) |
-| GND | Общий | Общий | Требуется общее заземление |
-| RESET ESP | GPIO2 | RST | Опционально для удалённого перезапуска |
+**📚 Полная спецификация UART протокола:**
 
-- Питание UART согласуется уровнем 3V3; дополнительные делители/буферы не нужны.
+Детальное описание протокола (формат кадров, структуры данных, фрагментация, CRC, примеры) вынесено в отдельную библиотеку:
 
-### 4.2 Формат кадра
-Фрейм описан в `include/uart_protocol.h`:
+👉 **[idryer-protocol/docs/UART_PROTOCOL.md](https://github.com/pavluchenkor/idryer-protocol/blob/master/docs/UART_PROTOCOL.md)**
+
+**Что включает спецификация:**
+- Физический уровень и пины
+- Побайтовый разбор кадра
+- Типы сообщений (MessageKind)
+- Все структуры payload (Telemetry, Command, Log, Heartbeat)
+- Фрагментация больших данных (JSON конфига)
+- Таймауты и ретраи
+- Обработка ошибок
+- CRC16 расчёт
+- Hex примеры всех типов кадров
+
+**Используемая библиотека:**
+```ini
+[env:esp32]
+lib_deps =
+    https://github.com/pavluchenkor/idryer-protocol.git
 ```
-0xAA | версия | флаги | MessageKind | sequence | длина | payload | CRC16
-```
-- CRC16-CCITT (0x1021, init 0xFFFF), порядок байт: младший, затем старший.
-- `flags`: бит0 — требуется ACK, бит1 — это ACK, бит2 — ошибка. Остальные биты зарезервированы.
-- Максимальная длина полезной нагрузки — 48 байт. Повторная отправка выполняется максимум 3 раза.
 
-### 4.3 Словарь сообщений и структуры
-Ключевые `MessageKind`:
-- `Hello` / `HelloAck` — обмен ролями (`Role::Rp2040Controller`, `Role::EspBridge`), версиями прошивок и состоянием сети.
-- `Telemetry` → `TelemetryAck` — RP2040 передаёт `TelemetryPayload`: температура (×10 °C), влажность, мощность нагревателя, состояние (`DryerState`), `FaultCode`, вес катушки, `remainingMinutes`, `jobId`, `uptimeSeconds`.
-- `Command` → `CommandAck` — ESP посылает `CommandPayload` (`CommandCode::StartDry`, `Stop`, `Pause`, `Resume`, `PushConfig`, `Identify`, `ResetFault`, `WifiStatus`, `RequestTelemetry`). При ошибке RP2040 возвращает `AckPayload` с `ErrorCode`.
-- `ConfigPush`/`ConfigAck` — новые целевые параметры (`ConfigPayload`: цель°C×10, допустимая влажность, длительность, ШИМ вентилятора).
-- `Heartbeat` — обе стороны каждые 5 секунд передают `HeartbeatPayload` (uptime, RSSI для ESP, температура MCU для RP2040).
-- `Error` — несёт `ErrorPayload` (`ErrorCode::CrcMismatch`, `InvalidPayload`, `Timeout`, `SequenceMismatch`, `Busy`). Используется при исчерпании ретраев или некорректном кадре.
-- `Log` — текстовые диагностические сообщения (до 32 байт ASCII); флаг ACK не используется.
+Эта спецификация охватывает полный цикл взаимодействия микроконтроллера с iDryer Portal через WebSocket API. При расширении набора датчиков добавляйте поля в `TelemetryDataDto` и согласуйте их с backend командой (DTO настроены в «whitelist»-режиме, поэтому незадекларированные поля игнорируются).
 
-### 4.4 Последовательности и тайминги
-**Старт устройства**
-1. RP2040 ждёт стабильного питания ESP и шлёт `Hello` с версией прошивки и маской возможностей.
-2. ESP отвечает `HelloAck` с состоянием сети (`Wi-Fi connecting/connected`, RSSI, сохранённые `deviceId`/`token`).
-3. После обмена RP2040 переходит в штатный режим и начинает отправлять `Telemetry` с периодом:
-   - 1 с при активной сушке.
-   - 15 с в режиме IDLE (или любое событие: изменение RFID, веса, состояния).
-4. ESP подтверждает каждый `Telemetry` (`FLAG_ACK_REQUIRED` обязательно). При отсутствии Ack за 700 мс RP2040 повторяет кадр, максимум три попытки; после трёх неудач выставляет `FaultCode::UartTimeout` и отправляет `Error`.
+---
 
-**Получение команды с сервера**
-1. Backend шлёт команду через WebSocket → ESP формирует `Command` с новым `sequence`, устанавливает флаг ACK.
-2. RP2040 проверяет параметры (`CommandPayload.arg0/arg1`, `targetState`). Если команда допустима — выполняет и отвечает `CommandAck` (`ErrorCode::None`). При отклонении указывает причину (`CommandRejected`, `Busy` и т. п.).
-3. Если ESP не получил Ack за 700 мс, повторяет кадр (до 3 раз) и при провале шлёт на сервер событие `DEVICE_UART_FAULT`, переводя устройство в offline.
+## 📚 Связанные документы
 
-**Heartbeat и восстановление**
-- Каждая сторона отправляет `Heartbeat` каждые 5 с. Если нет кадров >20 с (`LINK_LOSS_TIMEOUT_MS`), ESP инициирует перезапуск UART-драйвера и уведомляет сервер. RP2040 при отсутствии любых сообщений более 20 с также генерирует `FaultCode::UartTimeout`.
-- После перезапуска ESP снова шлёт `Hello`, RP2040 сбрасывает счётчики и отвечает `HelloAck`.
+### iDryer Protocol (общая библиотека)
 
-**Логи и диагностика**
-- RP2040 может отправлять `Log` при смене состояния, аварии датчика, запуске программы. ESP передаёт текст в backend (WebSocket событие `device:log`).
-- ESP отправляет `Error` при внутренних проблемах (например, не удалось сериализовать WebSocket-команду). Поле `detail` кодирует дополнительные данные (ожидаемая длина, статус HTTP и т. д.).
+**GitHub:** https://github.com/pavluchenkor/idryer-protocol
 
-### 4.5 Требования к реализациям
-- Любой кадр с неизвестным `MessageKind` игнорируется, но сторона отправляет `Error` (`UnknownMessage`).
-- Номера последовательностей инкрементируются по модулю 256 независимо в каждую сторону.
-- RP2040 сбрасывает глобальные состояния (PID нагревателя, вентилятор) только после подтверждённой команды `Stop` или `ResetFault`.
-- ESP хранит зеркалирование состояния (`DryerState`) для отображения в портале и переподключения WebSocket.
-- Таймеры должны сбрасываться на любой входящий кадр, включая `Log`. Если `Heartbeat` не получен вовремя, сторожа переводят интерфейс в Fault.
+| Документ | Описание |
+|----------|----------|
+| [UART_PROTOCOL.md](https://github.com/pavluchenkor/idryer-protocol/blob/master/docs/UART_PROTOCOL.md) | Детальная спецификация UART (RP2040 ↔ ESP32) |
+| [SYSTEM_MAP.md](https://github.com/pavluchenkor/idryer-protocol/blob/master/docs/SYSTEM_MAP.md) | Архитектура системы, компоненты, источники правды |
+| [mqtt-api-kit/](https://github.com/pavluchenkor/idryer-protocol/tree/master/docs/mqtt-api-kit) | MQTT API документация |
+| [error_defs.h](https://github.com/pavluchenkor/idryer-protocol/blob/master/docs/examples/error_defs.h) | Пример системы ошибок (для справки) |
 
-### 4.6 Справочник payload’ов
-**TelemetryPayload**
+### Backend (iDryerPortal)
 
-| Поле | Тип | Масштаб | Диапазон | Комментарий |
-| --- | --- | --- | --- | --- |
-| `temperatureC10` | int16 | градус ×10 | -500…1500 | Температура камеры |
-| `humidityPct` | uint8 | % | 0…100 | Влажность воздуха |
-| `heaterPowerPct` | uint8 | % | 0…100 | Текущий ШИМ нагревателя |
-| `fanOn` | uint8 | bool | 0/1 | Состояние вентилятора |
-| `filamentWeightGrams` | uint16 | г | 0…10000 | Вес катушки |
-| `state` | DryerState | — | см. enum | IDLE, PREHEAT, … |
-| `fault` | FaultCode | — | см. enum | Последняя авария |
-| `remainingMinutes` | uint16 | мин | 0…65535 | Остаток программы |
-| `jobId` | uint32 | — | — | Идентификатор задания из backend |
-| `uptimeSeconds` | uint32 | сек | 0…4,2e9 | Аптайм RP2040 |
+| Документ | Описание |
+|----------|----------|
+| `backend/src/gateway/dto/` | DTO для WebSocket сообщений |
+| `backend/src/devices/` | API регистрации устройств |
+| `backend/prisma/schema.prisma` | Схема БД (Device, Session, Filament) |
 
-**CommandPayload**
+### RP2040 (контроллер)
 
-| Код | Назначение | Аргументы |
-| --- | --- | --- |
-| `StartDry` | Запустить сушку | `arg0` = цель°C×10, `arg1` = длительность в мин |
-| `Stop` | Остановить цикл | — |
-| `Pause`/`Resume` | Пауза и возобновление | — |
-| `PushConfig` | Обновить базовые настройки | payload `ConfigPayload` |
-| `Identify` | Подсветка/звуковой сигнал | `arg0` = длительность мс |
-| `ResetFault` | Снять аварийное состояние | — |
-| `RequestTelemetry` | Требует немедленного кадра телеметрии | — |
-| `WifiStatus` | Вернуть RSSI, SSID, IP | — |
+| Документ | Описание |
+|----------|----------|
+| `src/menu/menu_v2.yaml` | Структура меню устройства |
+| `src/error/error_defs.h` | Система ошибок (X-macros) |
 
-RP2040 обязан отвечать `CommandAck` c `AckPayload` (`ackSequence`, `ErrorCode`). Допустимые ошибки: `Busy`, `InvalidPayload`, `CommandRejected`.
+---
 
-**HeartbeatPayload**
-
-| Поле | Отправитель | Комментарий |
-| --- | --- | --- |
-| `uptimeSeconds` | обе стороны | Аптайм в секундах |
-| `wifiRssiDbm` | ESP | RSSI Wi-Fi в дБм; RP2040 использует поле для температуры MCU |
-| `errorsSinceBoot` | обе стороны | Счётчик критических ошибок |
-
-**ErrorPayload**
-
-| Код | Описание | Detail |
-| --- | --- | --- |
-| `CrcMismatch` | Контрольная сумма не совпала | ожидаемая/фактическая длина |
-| `UnknownMessage` | `MessageKind` не поддерживается | значение поля |
-| `InvalidPayload` | Размер/данные не соответствуют структуре | смещение/код проверки |
-| `Busy` | Система не готова выполнить команду | текущий `DryerState` |
-| `Timeout` | Не получили ACK/ответ | sequence |
-| `SequenceMismatch` | ACK с другим номером | ожидаемый/полученный sequence |
-
-ESP также транслирует эти коды в backend (event `device:uartError`).
-
-### 4.7 Соответствие состояний RP2040 и портала
-- `DryerState::Idle` ↔ Web UI статус “Готов”.
-- `DryerState::Preheat` ↔ “Нагрев”.
-- `DryerState::Drying` ↔ “Сушка активна”.
-- `DryerState::Cooling` ↔ “Охлаждение”.
-- `DryerState::Fault` ↔ “Ошибка” с отображением `FaultCode` (`SensorFailure`, `HeaterOverrun`, `UartTimeout`, `CommandRejected`).
-- `DryerState::Service` ↔ “Сервисный режим” — backend не посылает команды, кроме `ResetFault`.
-
-Backend хранит `state` зеркально и при подключении WebSocket передаёт его в UI. ESP обязан инициировать `Command`/`ConfigPush` только когда RP2040 подтвердил `HelloAck`.
-
-Эта спецификация охватывает полный цикл взаимодействия микроконтроллера с iDryer Portal и UART-каналом к RP2040. При расширении набора датчиков добавляйте поля в `TelemetryDataDto` и согласуйте их с backend командой (DTO настроены в «whitelist»-режиме, поэтому незадекларированные поля игнорируются).
+**Последнее обновление:** 2025-12-23

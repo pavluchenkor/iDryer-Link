@@ -9,15 +9,20 @@ using DryerUart::AckPayload;
 using DryerUart::CommandCode;
 using DryerUart::CommandPayload;
 using DryerUart::ConfigPayload;
+using DryerUart::DryerState;
+using DryerUart::DryerMode;
 using DryerUart::ErrorCode;
 using DryerUart::ErrorPayload;
 using DryerUart::FrameHeader;
 using DryerUart::HelloPayload;
 using DryerUart::MessageKind;
 using DryerUart::TelemetryPayload;
-using DryerUart::DryerState;
+using DryerUart::StatusPayload;
+using DryerUart::WeightsPayload;
+using DryerUart::RfidPayload;
 
-namespace {
+namespace
+{
 
 #ifdef DEBUG_SERIAL
 #define NET_LOG(...) DEBUG_SERIAL.printf(__VA_ARGS__)
@@ -25,20 +30,21 @@ namespace {
 #define NET_LOG(...)
 #endif
 
-constexpr uint32_t WIFI_RETRY_INTERVAL_MS = 5000;
-constexpr uint32_t PROVISION_RETRY_MS = 10000;
-constexpr uint32_t REGISTRATION_RETRY_MS = 60000;
-constexpr uint32_t CLAIM_POLL_INTERVAL_MS = 5000;
-constexpr uint32_t MQTT_RETRY_INTERVAL_MS = 5000;
-constexpr uint32_t TELEMETRY_PUBLISH_INTERVAL_MS = 5000;  // Каждые 5 сек
+  constexpr uint32_t WIFI_RETRY_INTERVAL_MS = 5000;
+  constexpr uint32_t PROVISION_RETRY_MS = 10000;
+  constexpr uint32_t REGISTRATION_RETRY_MS = 60000;
+  constexpr uint32_t CLAIM_POLL_INTERVAL_MS = 5000;
+  constexpr uint32_t MQTT_RETRY_INTERVAL_MS = 5000;
+  constexpr uint32_t TELEMETRY_PUBLISH_INTERVAL_MS = 5000; // Каждые 5 сек
 
-// API endpoints
-const char* API_BASE = "https://portal.idryer.org/api";
+  // API endpoints
+  const char *API_BASE = "https://portal.idryer.org/api";
 
-/**
- * @brief Генерация серийного номера на основе MAC адреса
- */
-String generateSerialNumber() {
+  /**
+   * @brief Генерация серийного номера на основе MAC адреса
+   */
+  String generateSerialNumber()
+  {
     uint8_t mac[6];
     WiFi.macAddress(mac);
 
@@ -48,17 +54,19 @@ String generateSerialNumber() {
              esp_random() % 10000000);
 
     return String(serialNumber);
-}
+  }
 
 } // namespace
 
-void NetworkManager::begin(DryerUart::UartBridge *bridge) {
+void NetworkManager::begin(DryerUart::UartBridge *bridge)
+{
   uart_ = bridge;
   credentialStore_.begin();
 
   // Генерируем или загружаем serialNumber
-  if (identity_.serialNumber.isEmpty()) {
-      identity_.serialNumber = generateSerialNumber();
+  if (identity_.serialNumber.isEmpty())
+  {
+    identity_.serialNumber = generateSerialNumber();
   }
 
   // Загружаем сохраненные credentials (token, deviceId)
@@ -71,22 +79,23 @@ void NetworkManager::begin(DryerUart::UartBridge *bridge) {
   lastWifiAttempt_ = millis() - WIFI_RETRY_INTERVAL_MS;
 
   // Настраиваем MQTT callback для команд
-  mqttClient_.setCommandCallback([this](const char* cmd, JsonObjectConst data) {
-      handleMqttCommand(cmd, data);
-  });
+  mqttClient_.setCommandCallback([this](const char *cmd, JsonObjectConst data)
+                                 { handleMqttCommand(cmd, data); });
 
   NET_LOG("[NET] Init: serial=%s deviceId=%s\n",
           identity_.serialNumber.c_str(),
           identity_.deviceId.c_str());
 }
 
-void NetworkManager::loop() {
+void NetworkManager::loop()
+{
   ensureWifi();
 
-  if (WiFi.status() == WL_CONNECTED) {
+  if (WiFi.status() == WL_CONNECTED)
+  {
     ensureProvisioning();
-    ensureRegistration();
-    pollClaimStatus();
+    // ensureRegistration() - убрано! Теперь только по запросу через requestClaimProcess()
+    pollClaimStatus();  // Работает только если awaitingClaim_ == true
     ensureMqtt();
 
     // Публикация топиков
@@ -99,9 +108,12 @@ void NetworkManager::loop() {
 // Состояние подключения
 // ============================================================================
 
-void NetworkManager::ensureWifi() {
-  if (WiFi.status() == WL_CONNECTED) {
-    if (state_ == CloudState::WifiConnecting) {
+void NetworkManager::ensureWifi()
+{
+  if (WiFi.status() == WL_CONNECTED)
+  {
+    if (state_ == CloudState::WifiConnecting)
+    {
       state_ = CloudState::Provisioning;
       NET_LOG("[NET] Wi-Fi connected, IP: %s\n", WiFi.localIP().toString().c_str());
     }
@@ -109,16 +121,20 @@ void NetworkManager::ensureWifi() {
   }
 
   const uint32_t now = millis();
-  if (now - lastWifiAttempt_ < WIFI_RETRY_INTERVAL_MS) {
+  if (now - lastWifiAttempt_ < WIFI_RETRY_INTERVAL_MS)
+  {
     return;
   }
   lastWifiAttempt_ = now;
 
-  if (!wifiScanLogged_) {
+  if (!wifiScanLogged_)
+  {
     NET_LOG("[NET] Scanning Wi-Fi networks...\n");
     const int networkCount = WiFi.scanNetworks(/*async=*/false, true);
-    if (networkCount > 0) {
-      for (int i = 0; i < networkCount; ++i) {
+    if (networkCount > 0)
+    {
+      for (int i = 0; i < networkCount; ++i)
+      {
         NET_LOG("[NET] AP %d: %s (RSSI=%d dBm)\n", i + 1,
                 WiFi.SSID(i).c_str(), WiFi.RSSI(i));
       }
@@ -132,87 +148,174 @@ void NetworkManager::ensureWifi() {
   state_ = CloudState::WifiConnecting;
 }
 
-void NetworkManager::ensureProvisioning() {
+void NetworkManager::ensureProvisioning()
+{
   // Если токен уже есть - пропускаем
-  if (!identity_.token.isEmpty()) {
-    if (state_ == CloudState::Provisioning) {
+  if (!identity_.token.isEmpty())
+  {
+    if (state_ == CloudState::Provisioning)
+    {
       state_ = CloudState::Registering;
     }
     return;
   }
 
   const uint32_t now = millis();
-  if (now - lastProvisionAttempt_ < PROVISION_RETRY_MS) {
+  if (now - lastProvisionAttempt_ < PROVISION_RETRY_MS)
+  {
     return;
   }
   lastProvisionAttempt_ = now;
 
   NET_LOG("[NET] Provisioning device...\n");
-  if (provisionDevice()) {
+  if (provisionDevice())
+  {
     credentialStore_.save(identity_);
     state_ = CloudState::Registering;
   }
 }
 
-void NetworkManager::ensureRegistration() {
-  // Если устройство уже привязано - пропускаем
-  if (!identity_.deviceId.isEmpty()) {
-    if (state_ == CloudState::Registering || state_ == CloudState::AwaitingClaim) {
-      state_ = CloudState::Ready;
-    }
-    return;
+bool NetworkManager::requestClaimProcess()
+{
+  using DryerUart::ClaimStatusPayload;
+  using DryerUart::ClaimingStatus;
+
+  // Проверяем что устройство еще не привязано
+  if (!identity_.deviceId.isEmpty())
+  {
+    NET_LOG("[NET] Device already claimed, deviceId=%s\n", identity_.deviceId.c_str());
+    return false;
   }
 
-  // Если еще не получили token - пропускаем
-  if (identity_.token.isEmpty()) {
-    return;
+  // Проверяем что WiFi подключен
+  if (WiFi.status() != WL_CONNECTED)
+  {
+    NET_LOG("[NET] WiFi not connected\n");
+    ClaimStatusPayload payload{};
+    payload.status = ClaimingStatus::Error;
+    payload.pin[0] = '\0';
+    payload.expiresAt = 0;
+    payload.remainingSeconds = 0;
+    uart_->sendClaimStatus(payload);
+    return false;
   }
 
-  const uint32_t now = millis();
-  if (!awaitingClaim_) {
-    if (now - lastRegistrationAttempt_ >= REGISTRATION_RETRY_MS) {
-      NET_LOG("[NET] Registering device for claim...\n");
-      if (registerDevice()) {
-        awaitingClaim_ = true;
-        scheduleNextClaimPoll();
-      }
-      lastRegistrationAttempt_ = now;
+  // Проверяем что получили token (если нет - делаем provision)
+  if (identity_.token.isEmpty())
+  {
+    NET_LOG("[NET] No token, running provision first...\n");
+    ClaimStatusPayload payload{};
+    payload.status = ClaimingStatus::Provisioning;
+    payload.pin[0] = '\0';
+    payload.expiresAt = 0;
+    payload.remainingSeconds = 0;
+    uart_->sendClaimStatus(payload);
+
+    if (!provisionDevice())
+    {
+      NET_LOG("[NET] Provision failed\n");
+      payload.status = ClaimingStatus::Error;
+      uart_->sendClaimStatus(payload);
+      return false;
     }
+    credentialStore_.save(identity_);
   }
+
+  // Проверяем что уже не в процессе claiming
+  if (awaitingClaim_)
+  {
+    NET_LOG("[NET] Claim process already in progress, PIN=%s\n", pendingPin_.c_str());
+    return true;  // Уже запущен
+  }
+
+  NET_LOG("[NET] Starting claim process by user request...\n");
+  if (registerDevice())
+  {
+    awaitingClaim_ = true;
+    scheduleNextClaimPoll();
+    state_ = CloudState::AwaitingClaim;
+
+    // Отправляем PIN на RP2040
+    ClaimStatusPayload payload{};
+    payload.status = ClaimingStatus::WaitingClaim;
+    strncpy(payload.pin, pendingPin_.c_str(), sizeof(payload.pin) - 1);
+    payload.pin[8] = '\0';
+    payload.expiresAt = 0; // TODO: получить из API
+    payload.remainingSeconds = 600; // 10 минут
+    uart_->sendClaimStatus(payload);
+
+    NET_LOG("[CLAIM] PIN sent to RP2040: %s\n", pendingPin_.c_str());
+    return true;
+  }
+
+  // Ошибка регистрации
+  ClaimStatusPayload payload{};
+  payload.status = ClaimingStatus::Error;
+  payload.pin[0] = '\0';
+  payload.expiresAt = 0;
+  payload.remainingSeconds = 0;
+  uart_->sendClaimStatus(payload);
+  return false;
 }
 
-void NetworkManager::pollClaimStatus() {
-  if (!awaitingClaim_ || !identity_.deviceId.isEmpty()) {
+void NetworkManager::ensureRegistration()
+{
+  // DEPRECATED: Этот метод больше не вызывается автоматически
+  // Регистрация теперь только через requestClaimProcess()
+  // Оставлен для обратной совместимости
+}
+
+void NetworkManager::pollClaimStatus()
+{
+  using DryerUart::ClaimCompletePayload;
+
+  if (!awaitingClaim_ || !identity_.deviceId.isEmpty())
+  {
     return;
   }
 
   const uint32_t now = millis();
-  if (now - lastClaimPollAt_ < CLAIM_POLL_INTERVAL_MS) {
+  if (now - lastClaimPollAt_ < CLAIM_POLL_INTERVAL_MS)
+  {
     return;
   }
   lastClaimPollAt_ = now;
 
   NET_LOG("[NET] Checking claim status...\n");
-  if (checkClaim()) {
+  if (checkClaim())
+  {
     awaitingClaim_ = false;
     credentialStore_.save(identity_);
     state_ = CloudState::Ready;
     NET_LOG("[NET] Device claimed! deviceId=%s\n", identity_.deviceId.c_str());
+
+    // Отправляем ClaimComplete на RP2040
+    ClaimCompletePayload payload{};
+    payload.success = 1;
+    strncpy(payload.deviceId, identity_.deviceId.c_str(), sizeof(payload.deviceId) - 1);
+    payload.deviceId[36] = '\0';
+    uart_->sendClaimComplete(payload);
+    NET_LOG("[CLAIM] ClaimComplete sent to RP2040\n");
   }
 }
 
-void NetworkManager::ensureMqtt() {
+void NetworkManager::ensureMqtt()
+{
   // Нужны token и deviceId для подключения к MQTT
-  if (identity_.token.isEmpty() || identity_.deviceId.isEmpty()) {
+  if (identity_.token.isEmpty() || identity_.deviceId.isEmpty())
+  {
     return;
   }
 
-  if (WiFi.status() != WL_CONNECTED) {
+  if (WiFi.status() != WL_CONNECTED)
+  {
     return;
   }
 
-  if (mqttClient_.isConnected()) {
-    if (state_ != CloudState::Online) {
+  if (mqttClient_.isConnected())
+  {
+    if (state_ != CloudState::Online)
+    {
       state_ = CloudState::Online;
       NET_LOG("[NET] MQTT Online!\n");
       publishInfoOnce();
@@ -221,7 +324,8 @@ void NetworkManager::ensureMqtt() {
   }
 
   const uint32_t now = millis();
-  if (now - lastMqttConnectAttempt_ < MQTT_RETRY_INTERVAL_MS) {
+  if (now - lastMqttConnectAttempt_ < MQTT_RETRY_INTERVAL_MS)
+  {
     return;
   }
   lastMqttConnectAttempt_ = now;
@@ -231,9 +335,13 @@ void NetworkManager::ensureMqtt() {
 
   // Инициализируем MQTT клиент (только один раз)
   static bool mqttInitialized = false;
-  if (!mqttInitialized) {
-      mqttClient_.begin(identity_.serialNumber.c_str(), identity_.token.c_str());
-      mqttInitialized = true;
+  if (!mqttInitialized)
+  {
+    NET_LOG("[NET] MQTT init: serial='%s' token='%s'\n",
+            identity_.serialNumber.c_str(),
+            identity_.token.isEmpty() ? "(empty)" : "***");
+    mqttClient_.begin(identity_.serialNumber.c_str(), identity_.token.c_str());
+    mqttInitialized = true;
   }
 
   mqttClient_.connect();
@@ -243,7 +351,8 @@ void NetworkManager::ensureMqtt() {
 // Регистрация устройства (HTTPS API)
 // ============================================================================
 
-bool NetworkManager::provisionDevice() {
+bool NetworkManager::provisionDevice()
+{
   // POST /devices/provision
   // Request:
   // {
@@ -275,7 +384,8 @@ bool NetworkManager::provisionDevice() {
   serializeJson(body, payload);
 
   DynamicJsonDocument response(512);
-  if (!httpPostJson(buildProvisionUrl(), payload, response)) {
+  if (!httpPostJson(buildProvisionUrl(), payload, response))
+  {
     NET_LOG("[NET] Provision failed\n");
     return false;
   }
@@ -288,9 +398,11 @@ bool NetworkManager::provisionDevice() {
           identity_.token.c_str(), isNew, isClaimed);
 
   // Если устройство уже привязано - пропускаем регистрацию PIN
-  if (isClaimed) {
+  if (isClaimed)
+  {
     // Получаем deviceId из базы (должен быть в ответе для claimed устройств)
-    if (response.containsKey("deviceId")) {
+    if (response.containsKey("deviceId"))
+    {
       identity_.deviceId = response["deviceId"].as<String>();
     }
   }
@@ -298,7 +410,8 @@ bool NetworkManager::provisionDevice() {
   return true;
 }
 
-bool NetworkManager::registerDevice() {
+bool NetworkManager::registerDevice()
+{
   // POST /devices/register
   // Request:
   // {
@@ -322,7 +435,8 @@ bool NetworkManager::registerDevice() {
   serializeJson(body, payload);
 
   DynamicJsonDocument response(512);
-  if (!httpPostJson(buildRegisterUrl(), payload, response)) {
+  if (!httpPostJson(buildRegisterUrl(), payload, response))
+  {
     NET_LOG("[NET] Register failed\n");
     return false;
   }
@@ -336,7 +450,8 @@ bool NetworkManager::registerDevice() {
   return true;
 }
 
-bool NetworkManager::checkClaim() {
+bool NetworkManager::checkClaim()
+{
   // GET /devices/check-claim/{token}
   //
   // Response (ещё не привязано):
@@ -353,12 +468,14 @@ bool NetworkManager::checkClaim() {
   // Polling каждые 5 секунд до получения claimed=true
 
   DynamicJsonDocument response(512);
-  if (!httpGetJson(buildCheckClaimUrl(identity_.token), response)) {
+  if (!httpGetJson(buildCheckClaimUrl(identity_.token), response))
+  {
     return false;
   }
 
   bool claimed = response["claimed"].as<bool>();
-  if (!claimed) {
+  if (!claimed)
+  {
     return false;
   }
 
@@ -367,7 +484,8 @@ bool NetworkManager::checkClaim() {
   return true;
 }
 
-void NetworkManager::scheduleNextClaimPoll() {
+void NetworkManager::scheduleNextClaimPoll()
+{
   lastClaimPollAt_ = millis() - CLAIM_POLL_INTERVAL_MS;
 }
 
@@ -375,15 +493,17 @@ void NetworkManager::scheduleNextClaimPoll() {
 // Публикация MQTT топиков
 // ============================================================================
 
-void NetworkManager::publishInfoOnce() {
-  if (infoPublished_) {
+void NetworkManager::publishInfoOnce()
+{
+  if (infoPublished_)
+  {
     return;
   }
 
   // Версии прошивки
-  const char* hwVersion = "v1.0";
-  const char* fwVersion = "1.0.0";
-  uint32_t workTimeCounter = millis() / 1000;  // Для теста - uptime
+  const char *hwVersion = "v1.0";
+  const char *fwVersion = "1.0.0";
+  uint32_t workTimeCounter = millis() / 1000; // Для теста - uptime
 
   mqttClient_.publishInfo(hwVersion, fwVersion, workTimeCounter);
   infoPublished_ = true;
@@ -391,13 +511,16 @@ void NetworkManager::publishInfoOnce() {
   NET_LOG("[NET] Published info topic\n");
 }
 
-void NetworkManager::publishTelemetry() {
-  if (!mqttClient_.isConnected() || !telemetryDirty_) {
+void NetworkManager::publishTelemetry()
+{
+  if (!mqttClient_.isConnected() || !telemetryDirty_)
+  {
     return;
   }
 
   const uint32_t now = millis();
-  if (now - lastTelemetryPublishAt_ < TELEMETRY_PUBLISH_INTERVAL_MS) {
+  if (now - lastTelemetryPublishAt_ < TELEMETRY_PUBLISH_INTERVAL_MS)
+  {
     return;
   }
   lastTelemetryPublishAt_ = now;
@@ -405,144 +528,123 @@ void NetworkManager::publishTelemetry() {
   // Формируем JSON согласно API:
   // Topic: idryer/{serialNumber}/telemetry
   // QoS: 0, Retained: false, Frequency: каждые 5 сек
-  //
-  // {
-  //   "units": [
-  //     {
-  //       "unitId": "U1",
-  //       "temperature": 49.8,
-  //       "humidity": 12.3,
-  //       "heaterPower": 85,
-  //       "fanStatus": true
-  //     }
-  //   ],
-  //   "timestamp": "2025-12-22T10:00:00Z"
-  // }
   DynamicJsonDocument doc(1024);
   JsonArray units = doc.createNestedArray("units");
 
-  JsonObject unit = units.createNestedObject();
-  unit["unitId"] = "U1";  // TODO: взять из payload
-  unit["temperature"] = latestTelemetry_.temperatureC10 / 10.0f;
-  unit["humidity"] = latestTelemetry_.humidityPct;
-  unit["heaterPower"] = latestTelemetry_.heaterPowerPct;
-  unit["fanStatus"] = (latestTelemetry_.fanOn == 1);
+  // Итерируем по массиву TelemetryEntry в payload
+  for (uint8_t i = 0; i < latestTelemetry_.count && i < 4; ++i)
+  {
+    const auto &entry = latestTelemetry_.units[i];
+    JsonObject unit = units.createNestedObject();
+
+    // Конвертируем unitId: 0-3 → U1-U4
+    char unitIdStr[3];
+    snprintf(unitIdStr, sizeof(unitIdStr), "U%d", entry.unitId + 1);
+    unit["unitId"] = unitIdStr;
+
+    unit["temperature"] = entry.temperatureC10 / 10.0f;
+    unit["humidity"] = entry.humidityPct;
+    unit["heaterPower"] = entry.heaterPowerPct;
+    unit["fanStatus"] = (entry.fanOn == 1);
+  }
 
   // timestamp добавляется автоматически в mqttClient_.publishTelemetry()
 
-  if (mqttClient_.publishTelemetry(doc)) {
+  if (mqttClient_.publishTelemetry(doc))
+  {
     telemetryDirty_ = false;
-    NET_LOG("[NET] Published telemetry\n");
+    NET_LOG("[NET] Published telemetry (%d units)\n", latestTelemetry_.count);
   }
 }
 
-void NetworkManager::publishStatus() {
-  if (!mqttClient_.isConnected()) {
+void NetworkManager::publishStatus()
+{
+  if (!mqttClient_.isConnected() || !statusDirty_)
+  {
     return;
   }
 
-  // Формируем JSON согласно API:
-  // Topic: idryer/{serialNumber}/status
-  // QoS: 1, Retained: true
-  // Frequency: При изменении режима/статуса
-  //
-  // JSON формат (DRYING):
-  // {
-  //   "units": [
-  //     {
-  //       "unitId": "U1",
-  //       "mode": "DRYING",
-  //       "sessionId": "a7b3c9d1-e4f5-6789-0abc-def123456789",
-  //       "target": {
-  //         "temperature": 50,
-  //         "duration": 240,
-  //         "humidity": 10
-  //       },
-  //       "elapsedTime": 180
-  //     }
-  //   ],
-  //   "uptime": 3600,
-  //   "timestamp": "2025-12-22T10:00:00Z"
-  // }
-  //
-  // JSON формат (IDLE):
-  // {
-  //   "units": [
-  //     {
-  //       "unitId": "U1",
-  //       "mode": "IDLE"
-  //     }
-  //   ],
-  //   "uptime": 7200,
-  //   "timestamp": "2025-12-22T16:00:00Z"
-  // }
-
-  DynamicJsonDocument doc(1024);
+  DynamicJsonDocument doc(2048);  // Больший размер для нескольких юнитов
   JsonArray units = doc.createNestedArray("units");
 
-  JsonObject unit = units.createNestedObject();
-  unit["unitId"] = "U1";  // TODO: взять из payload
+  // Итерируем по массиву StatusEntry в payload
+  for (uint8_t i = 0; i < latestStatus_.count && i < 4; ++i)
+  {
+    const auto &entry = latestStatus_.units[i];
+    JsonObject unit = units.createNestedObject();
 
-  // Определяем режим работы
-  DryerState state = static_cast<DryerState>(latestTelemetry_.state);
-  const char* modeStr = "IDLE";
+    // Конвертируем unitId: 0-3 → U1-U4
+    char unitIdStr[3];
+    snprintf(unitIdStr, sizeof(unitIdStr), "U%d", entry.unitId + 1);
+    unit["unitId"] = unitIdStr;
 
-  switch (state) {
-    case DryerState::Idle:
+    // Конвертируем DryerMode в строку
+    const char *modeStr = "IDLE";
+    switch (entry.mode)
+    {
+    case DryerMode::Idle:
       modeStr = "IDLE";
-      // При IDLE очищаем sessionId (устройство остановлено)
-      currentSessionId_ = "";
       break;
-
-    case DryerState::Drying:
+    case DryerMode::Drying:
       modeStr = "DRYING";
-      // При старте DRYING генерируем новый sessionId если его нет
-      if (currentSessionId_.isEmpty() || lastMode_ != static_cast<uint8_t>(state)) {
-        char uuidBuf[37];
-        currentSessionId_ = MqttClient::generateUuid(uuidBuf);
-        NET_LOG("[NET] Generated sessionId: %s\n", currentSessionId_.c_str());
-      }
       break;
-
-    case DryerState::Fault:
+    case DryerMode::Storage:
+      modeStr = "STORAGE";
+      break;
+    case DryerMode::Profile:
+      modeStr = "PROFILE";
+      break;
+    case DryerMode::Fault:
       modeStr = "FAULT";
-      // При FAULT очищаем sessionId (аварийная остановка)
-      currentSessionId_ = "";
       break;
-
     default:
+      modeStr = "UNKNOWN";
       break;
-  }
+    }
+    unit["mode"] = modeStr;
 
-  unit["mode"] = modeStr;
+    // Добавляем данные только для активных режимов
+    if (entry.mode != DryerMode::Idle && entry.mode != DryerMode::Fault)
+    {
+      unit["sessionNum"] = entry.sessionNum;
 
-  // Добавляем sessionId только для активных режимов
-  if (!currentSessionId_.isEmpty()) {
-    unit["sessionId"] = currentSessionId_;
+      // Target параметры
+      JsonObject target = unit.createNestedObject("target");
+      target["temperature"] = entry.targetTempC10 / 10.0f;
+      target["duration"] = entry.durationMinutes;
+      target["humidity"] = entry.targetHumidityPct;
 
-    // Добавляем target параметры
-    JsonObject target = unit.createNestedObject("target");
-    target["temperature"] = latestTelemetry_.temperatureC10 / 10.0f;  // TODO: целевая, не фактическая
-    target["duration"] = latestTelemetry_.remainingMinutes;  // TODO: общая длительность
-    target["humidity"] = 10;  // TODO: целевая влажность
+      // Временные поля
+      unit["totalElapsed"] = entry.elapsedSeconds;
+      unit["totalRemaining"] = entry.totalRemainingSeconds;
 
-    // Добавляем elapsedTime
-    unit["elapsedTime"] = latestTelemetry_.uptimeSeconds;  // TODO: время с начала сессии
+      // Для PROFILE режима добавляем этапы
+      if (entry.mode == DryerMode::Profile)
+      {
+        unit["currentStage"] = entry.currentStage;
+        unit["totalStages"] = entry.totalStages;
+        unit["stageElapsed"] = entry.stageElapsedSeconds;
+        unit["stageRemaining"] = entry.stageRemainingSeconds;
+      }
+    }
   }
 
   // Добавляем uptime устройства
-  doc["uptime"] = millis() / 1000;
+  doc["uptime"] = latestStatus_.uptime;
 
-  // Публикуем с retained=true
-  if (mqttClient_.publishStatus(doc)) {
-    lastMode_ = static_cast<uint8_t>(state);
-    NET_LOG("[NET] Published status: mode=%s sessionId=%s\n",
-            modeStr, currentSessionId_.c_str());
+  // timestamp добавляется автоматически в mqttClient_.publishStatus()
+
+  if (mqttClient_.publishStatus(doc))
+  {
+    statusDirty_ = false;
+    NET_LOG("[NET] Published status (%d units)\n", latestStatus_.count);
   }
 }
 
-void NetworkManager::flushPendingTelemetry() {
-  if (telemetryDirty_) {
+void NetworkManager::flushPendingTelemetry()
+{
+  if (telemetryDirty_)
+  {
     publishTelemetry();
   }
 }
@@ -552,43 +654,102 @@ void NetworkManager::flushPendingTelemetry() {
 // ============================================================================
 
 void NetworkManager::handleRpHello(const HelloPayload &payload,
-                                   const FrameHeader &header) {
+                                   const FrameHeader &header)
+{
   (void)payload;
   NET_LOG("[NET] RP2040 hello seq=%u\n", header.sequence);
 }
 
 void NetworkManager::handleTelemetry(const TelemetryPayload &payload,
-                                     const FrameHeader &header) {
-  (void)header;
+                                     const FrameHeader &header)
+{
+  NET_LOG("\n[RECV] Telemetry (seq=%d, count=%d)\n", header.sequence, payload.count);
 
-  // Проверяем изменение режима работы
-  bool modeChanged = (latestTelemetry_.state != payload.state);
+  // Вывод данных для отладки
+  NET_LOG("Units: ");
+  for (uint8_t i = 0; i < payload.count && i < 4; i++)
+  {
+    NET_LOG("U%d(T:%.1f°C H:%d%%) ",
+            payload.units[i].unitId,
+            payload.units[i].temperatureC10 / 10.0f,
+            payload.units[i].humidityPct);
+  }
+  NET_LOG("\n");
 
   latestTelemetry_ = payload;
   telemetryDirty_ = true;
+}
 
-  // Если режим изменился - публикуем status
-  if (modeChanged) {
-    publishStatus();
+void NetworkManager::handleStatus(const StatusPayload &payload,
+                                  const FrameHeader &header)
+{
+  NET_LOG("\n[RECV] Status (seq=%d, uptime=%ds, count=%d)\n",
+          header.sequence, payload.uptime, payload.count);
+
+  // Вывод данных для отладки
+  for (uint8_t i = 0; i < payload.count && i < 4; i++)
+  {
+    NET_LOG("  U%d: mode=%d session=%d elapsed=%ds remaining=%ds\n",
+            payload.units[i].unitId,
+            payload.units[i].mode,
+            payload.units[i].sessionNum,
+            payload.units[i].elapsedSeconds,
+            payload.units[i].totalRemainingSeconds);
   }
+
+  latestStatus_ = payload;
+  statusDirty_ = true;
+  publishStatus();
+}
+
+void NetworkManager::handleWeights(const WeightsPayload &payload,
+                                   const FrameHeader &header)
+{
+  NET_LOG("\n[RECV] Weights (seq=%d, count=%d)\n", header.sequence, payload.count);
+
+  // Вывод данных для отладки
+  NET_LOG("Sensors: ");
+  for (uint8_t i = 0; i < payload.count && i < 4; i++)
+  {
+    NET_LOG("S%d→U%d(%dg) ",
+            payload.weights[i].sensorId,
+            payload.weights[i].unitId,
+            payload.weights[i].weightGrams);
+  }
+  NET_LOG("\n");
+
+  latestWeights_ = payload;
+  weightsDirty_ = true;
+}
+
+void NetworkManager::handleRfidEvent(const RfidPayload &payload,
+                                     const FrameHeader &header)
+{
+  (void)payload;
+  (void)header;
+  // TODO: обработка RFID событий от RP2040
+  // Публиковать в MQTT RFID события
 }
 
 void NetworkManager::handleCommandAck(const AckPayload &payload,
-                                      const FrameHeader &header) {
+                                      const FrameHeader &header)
+{
   (void)payload;
   (void)header;
   // TODO: публиковать ACK в events топик
 }
 
 void NetworkManager::handleConfigAck(const AckPayload &payload,
-                                     const FrameHeader &header) {
+                                     const FrameHeader &header)
+{
   (void)payload;
   (void)header;
   // TODO: публиковать ACK в events топик
 }
 
 void NetworkManager::handleUartError(const ErrorPayload &payload,
-                                     bool remote) {
+                                     bool remote)
+{
   (void)payload;
   (void)remote;
   // TODO: публиковать ошибку в events топик
@@ -598,8 +759,10 @@ void NetworkManager::handleUartError(const ErrorPayload &payload,
 // Обработка команд от MQTT
 // ============================================================================
 
-void NetworkManager::handleMqttCommand(const char* command, JsonObjectConst data) {
-  if (!uart_) {
+void NetworkManager::handleMqttCommand(const char *command, JsonObjectConst data)
+{
+  if (!uart_)
+  {
     return;
   }
 
@@ -625,13 +788,20 @@ void NetworkManager::handleMqttCommand(const char* command, JsonObjectConst data
   // Маппинг MQTT команд на UART протокол
   CommandCode cmdCode = CommandCode::Stop;
 
-  if (strcmp(command, "start") == 0) {
-    cmdCode = CommandCode::StartDry;
-  } else if (strcmp(command, "stop") == 0) {
+  if (strcmp(command, "start") == 0)
+  {
+    cmdCode = CommandCode::Start;
+  }
+  else if (strcmp(command, "stop") == 0)
+  {
     cmdCode = CommandCode::Stop;
-  } else if (strcmp(command, "get_config") == 0) {
-    cmdCode = CommandCode::PushConfig;
-  } else if (strcmp(command, "set_config") == 0) {
+  }
+  else if (strcmp(command, "get_config") == 0)
+  {
+    cmdCode = CommandCode::SetConfig;
+  }
+  else if (strcmp(command, "set_config") == 0)
+  {
     // Обрабатываем конфигурацию - передаем через ConfigPayload на RP2040
     ConfigPayload config{};
     config.targetTemperatureC10 =
@@ -649,11 +819,17 @@ void NetworkManager::handleMqttCommand(const char* command, JsonObjectConst data
   cmdPayload.command = cmdCode;
   cmdPayload.targetState = static_cast<uint8_t>(DryerState::Drying);
   cmdPayload.arg0 = data["targetTemperature"].is<float>()
-                       ? static_cast<int32_t>(data["targetTemperature"].as<float>() * 10)
-                       : 0;
+                        ? static_cast<int32_t>(data["targetTemperature"].as<float>() * 10)
+                        : 550;  // по умолчанию 55°C
   cmdPayload.arg1 = data["durationMinutes"].is<int>()
-                       ? static_cast<uint32_t>(data["durationMinutes"].as<int>())
-                       : 0;
+                        ? static_cast<uint32_t>(data["durationMinutes"].as<int>())
+                        : 240;  // по умолчанию 240 мин
+
+  NET_LOG("[NET] Sending Command: code=%d, temp=%d.%d°C, duration=%dmin\n",
+          static_cast<int>(cmdCode),
+          cmdPayload.arg0 / 10,
+          cmdPayload.arg0 % 10,
+          cmdPayload.arg1);
 
   uart_->sendCommand(cmdPayload, true);
 }
@@ -663,21 +839,24 @@ void NetworkManager::handleMqttCommand(const char* command, JsonObjectConst data
 // ============================================================================
 
 bool NetworkManager::httpPostJson(const String &url, const String &body,
-                                  DynamicJsonDocument &response) {
+                                  DynamicJsonDocument &response)
+{
   WiFiClientSecure client;
-  client.setInsecure();  // TODO: добавить сертификат
+  client.setInsecure(); // TODO: добавить сертификат
 
   HTTPClient https;
   https.setTimeout(10000);
 
-  if (!https.begin(client, url)) {
+  if (!https.begin(client, url))
+  {
     return false;
   }
 
   https.addHeader("Content-Type", "application/json");
   int httpCode = https.POST(body);
 
-  if (httpCode < 200 || httpCode >= 300) {
+  if (httpCode < 200 || httpCode >= 300)
+  {
     NET_LOG("[NET] HTTP POST %s failed: %d\n", url.c_str(), httpCode);
     https.end();
     return false;
@@ -687,7 +866,8 @@ bool NetworkManager::httpPostJson(const String &url, const String &body,
   https.end();
 
   DeserializationError err = deserializeJson(response, payload);
-  if (err) {
+  if (err)
+  {
     NET_LOG("[NET] JSON parse error: %s\n", err.c_str());
     return false;
   }
@@ -696,20 +876,25 @@ bool NetworkManager::httpPostJson(const String &url, const String &body,
 }
 
 bool NetworkManager::httpGetJson(const String &url,
-                                 DynamicJsonDocument &response) {
+                                 DynamicJsonDocument &response)
+{
   WiFiClientSecure client;
-  client.setInsecure();  // TODO: добавить сертификат
+  client.setInsecure(); // TODO: добавить сертификат
 
   HTTPClient https;
   https.setTimeout(10000);
 
-  if (!https.begin(client, url)) {
+  if (!https.begin(client, url))
+  {
     return false;
   }
 
   int httpCode = https.GET();
 
-  if (httpCode < 200 || httpCode >= 300) {
+  // По документации: для /check-claim 404 - валидный ответ с JSON {"claimed": false}
+  // Поэтому принимаем 200-299 и 404
+  if (httpCode < 0 || (httpCode >= 300 && httpCode != 404))
+  {
     NET_LOG("[NET] HTTP GET %s failed: %d\n", url.c_str(), httpCode);
     https.end();
     return false;
@@ -719,17 +904,26 @@ bool NetworkManager::httpGetJson(const String &url,
   https.end();
 
   DeserializationError err = deserializeJson(response, payload);
-  return !err;
+  if (err)
+  {
+    NET_LOG("[NET] JSON parse error: %s\n", err.c_str());
+    return false;
+  }
+
+  return true;
 }
 
-String NetworkManager::buildProvisionUrl() const {
+String NetworkManager::buildProvisionUrl() const
+{
   return String(API_BASE) + "/devices/provision";
 }
 
-String NetworkManager::buildRegisterUrl() const {
+String NetworkManager::buildRegisterUrl() const
+{
   return String(API_BASE) + "/devices/register";
 }
 
-String NetworkManager::buildCheckClaimUrl(const String &token) const {
+String NetworkManager::buildCheckClaimUrl(const String &token) const
+{
   return String(API_BASE) + "/devices/check-claim/" + token;
 }

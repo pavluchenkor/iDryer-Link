@@ -1,63 +1,41 @@
 #include "credential_store.h"
 
-#include <ArduinoJson.h>
-#include <LittleFS.h>
-
 bool CredentialStore::begin() {
-  if (mounted_) {
-    return true;
-  }
-  mounted_ = LittleFS.begin();
-  return mounted_;
+  return true;  // NVS всегда доступна
 }
 
 bool CredentialStore::load(DeviceIdentity &identity) {
-  if (!begin()) {
+  if (!prefs_.begin(kNamespace, true)) {  // read-only
     return false;
   }
-  if (!LittleFS.exists(kPath)) {
-    return false;
-  }
-  File file = LittleFS.open(kPath, "r");
-  if (!file) {
-    return false;
-  }
-  DynamicJsonDocument doc(256);
-  auto err = deserializeJson(doc, file);
-  file.close();
-  if (err) {
-    return false;
-  }
-  identity.token = doc["token"].as<String>();
-  identity.deviceId = doc["deviceId"].as<String>();
-  identity.serialNumber = doc["serialNumber"].as<String>();
-  return identity.deviceId.length() > 0 && identity.token.length() > 0;
+
+  identity.token = prefs_.getString("token", "");
+  identity.deviceId = prefs_.getString("deviceId", "");
+  identity.serialNumber = prefs_.getString("serial", "");
+
+  prefs_.end();
+
+  return identity.token.length() > 0;
 }
 
 bool CredentialStore::save(const DeviceIdentity &identity) {
-  if (!begin()) {
+  if (!prefs_.begin(kNamespace, false)) {  // read-write
     return false;
   }
-  DynamicJsonDocument doc(256);
-  doc["token"] = identity.token;
-  doc["deviceId"] = identity.deviceId;
-  doc["serialNumber"] = identity.serialNumber;
 
-  File file = LittleFS.open(kPath, "w");
-  if (!file) {
-    return false;
-  }
-  const size_t bytes = serializeJson(doc, file);
-  file.close();
-  return bytes > 0;
+  prefs_.putString("token", identity.token);
+  prefs_.putString("deviceId", identity.deviceId);
+  prefs_.putString("serial", identity.serialNumber);
+
+  prefs_.end();
+  return true;
 }
 
 void CredentialStore::clear() {
-  if (!begin()) {
+  if (!prefs_.begin(kNamespace, false)) {
     return;
   }
-  if (LittleFS.exists(kPath)) {
-    LittleFS.remove(kPath);
-  }
+  prefs_.clear();
+  prefs_.end();
 }
 

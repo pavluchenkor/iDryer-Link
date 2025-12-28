@@ -1,7 +1,26 @@
 {
   "permissions": {
     "allow": [
-      "WebSearch"
+      "WebSearch",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push)",
+      "Bash(cat:*)",
+      "Bash(awk:*)",
+      "Bash(find:*)",
+      "Bash(pio run:*)",
+      "Bash(python -m serial.tools.miniterm:*)",
+      "WebFetch(domain:docs.espressif.com)",
+      "WebFetch(domain:www.espressif.com)",
+      "Bash(pio device monitor:*)",
+      "Bash(python3:*)",
+      "Bash(pip3 install:*)",
+      "Bash(~/.platformio/penv/bin/python3:*)",
+      "Bash(timeout 20 ~/.platformio/penv/bin/python3:*)",
+      "Bash(timeout 30 ~/.platformio/penv/bin/python3:*)",
+      "Bash(ls:*)",
+      "Bash(lsof:*)",
+      "Bash(grep:*)"
     ]
   }
 }
