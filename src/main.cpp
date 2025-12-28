@@ -1,8 +1,9 @@
 #include <Arduino.h>
 #include <idryer_protocol.h>
+#include <platform/arduino/idryer_arduino.h>
 #include <ArduinoJson.h>
 
-#include "network_manager.h"
+#include "secrets_config.h"
 
 using namespace DryerUart;
 
@@ -26,7 +27,11 @@ namespace
   constexpr uint32_t FIRMWARE_VERSION = (1u << 16); // 1.0.0
 
   UartBridge uartBridge;
-  NetworkManager networkManager;
+  ArduinoWifiManager wifiManager;
+  ArduinoHttpClient httpClient;
+  ArduinoCredentialStore credStore;
+  IdryerDevice device(&wifiManager, &httpClient, &credStore, &uartBridge);
+
   uint32_t lastHeartbeatAt = 0;
   uint32_t heartbeatErrors = 0;
 
@@ -39,7 +44,7 @@ namespace
       response.ssid[0] = '\0';
       uartBridge.sendHelloAck(response);
     }
-    networkManager.handleRpHello(payload, header);
+    device.handleRpHello(payload, header);
   }
 
   void handleTelemetry(const TelemetryPayload &payload, const FrameHeader &header)
@@ -57,12 +62,12 @@ namespace
     }
     DEBUG_JSON(doc);
 #endif
-    networkManager.handleTelemetry(payload, header);
+    device.handleTelemetry(payload, header);
   }
 
   void handleCommandAck(const AckPayload &payload, const FrameHeader &header)
   {
-    networkManager.handleCommandAck(payload, header);
+    device.handleCommandAck(payload, header);
     if (payload.status != ErrorCode::None)
     {
       heartbeatErrors++;
@@ -71,7 +76,7 @@ namespace
 
   void handleConfigAck(const AckPayload &payload, const FrameHeader &header)
   {
-    networkManager.handleConfigAck(payload, header);
+    device.handleConfigAck(payload, header);
     if (payload.status != ErrorCode::None)
     {
       heartbeatErrors++;
@@ -93,7 +98,7 @@ namespace
 
   void handleError(const ErrorPayload &payload, bool remote)
   {
-    networkManager.handleUartError(payload, remote);
+    device.handleUartError(payload, remote);
     heartbeatErrors++;
   }
 
@@ -116,7 +121,7 @@ namespace
     }
     DEBUG_JSON(doc);
 #endif
-    networkManager.handleStatus(payload, header);
+    device.handleStatus(payload, header);
   }
 
   void handleWeights(const WeightsPayload &payload, const FrameHeader &header)
@@ -133,7 +138,7 @@ namespace
     }
     DEBUG_JSON(doc);
 #endif
-    networkManager.handleWeights(payload, header);
+    device.handleWeights(payload, header);
   }
 
   void handleRfid(const RfidPayload &payload, const FrameHeader &header)
@@ -147,7 +152,7 @@ namespace
     doc["tag"] = String(payload.tag);
     DEBUG_JSON(doc);
 #endif
-    networkManager.handleRfidEvent(payload, header);
+    device.handleRfidEvent(payload, header);
   }
 
   void processHeartbeat()
@@ -180,8 +185,8 @@ namespace
   void handleClaimStart(const FrameHeader &header)
   {
     DEBUG_LOG("\n[CLAIM] ClaimStart received from RP2040 (seq=%d)\n", header.sequence);
-    // Вызываем процесс claiming в NetworkManager
-    networkManager.requestClaimProcess();
+    // Вызываем процесс claiming в IdryerDevice
+    device.requestClaimProcess();
   }
 
 } // namespace
@@ -214,9 +219,10 @@ void setup()
   uartBridge.setRfidHandler(handleRfid);
   uartBridge.setClaimStartHandler(handleClaimStart);
 
-  DEBUG_LOG("\n[INIT] Starting NetworkManager...\n");
-  networkManager.begin(&uartBridge);
-  DEBUG_LOG("[INIT] NetworkManager started. Ready to receive UART messages...\n");
+  DEBUG_LOG("\n[INIT] Starting WiFi and Device...\n");
+  wifiManager.begin(IDRYER_WIFI_SSID, IDRYER_WIFI_PASSWORD);
+  device.begin();
+  DEBUG_LOG("[INIT] Device started. Ready to receive UART messages...\n");
 
   sendInitialHello();
 }
@@ -225,5 +231,5 @@ void loop()
 {
   uartBridge.loop();
   processHeartbeat();
-  networkManager.loop();
+  device.loop();
 }

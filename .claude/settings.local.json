@@ -20,7 +20,8 @@
       "Bash(timeout 30 ~/.platformio/penv/bin/python3:*)",
       "Bash(ls:*)",
       "Bash(lsof:*)",
-      "Bash(grep:*)"
+      "Bash(grep:*)",
+      "Bash(mkdir:*)"
     ]
   }
 }
