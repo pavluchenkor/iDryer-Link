@@ -5,20 +5,15 @@
 #endif
 
 #ifndef IDRYER_WIFI_SSID
-#define IDRYER_WIFI_SSID "YOUR_WIFI_SSID"
+#define IDRYER_WIFI_SSID "Ru"
+// #define IDRYER_WIFI_SSID "YOUR_WIFI_SSID"
 #endif
 
 #ifndef IDRYER_WIFI_PASSWORD
-#define IDRYER_WIFI_PASSWORD "YOUR_WIFI_PASSWORD"
+#define IDRYER_WIFI_PASSWORD "Anastasia"
+// #define IDRYER_WIFI_PASSWORD "YOUR_WIFI_PASSWORD"
 #endif
 
-#ifndef IDRYER_DEVICE_TOKEN
-#define IDRYER_DEVICE_TOKEN "HARDWARE_TOKEN"
-#endif
-
-#ifndef IDRYER_DEVICE_SERIAL
-#define IDRYER_DEVICE_SERIAL "IDRYER-PRO-0000"
-#endif
 
 #ifndef IDRYER_PORTAL_HOST
 #define IDRYER_PORTAL_HOST "portal.idryer.org"
@@ -48,3 +43,14 @@
 #define IDRYER_HTTP_TIMEOUT_MS 8500
 #endif
 
+#ifndef MQTT_BROKER
+#define MQTT_BROKER "mqtt.idryer.org"
+#endif
+
+#ifndef MQTT_PORT
+#define MQTT_PORT 8883
+#endif
+
+#ifndef MQTT_USE_TLS
+#define MQTT_USE_TLS 1
+#endif

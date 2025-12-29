@@ -21,7 +21,9 @@
       "Bash(ls:*)",
       "Bash(lsof:*)",
       "Bash(grep:*)",
-      "Bash(mkdir:*)"
+      "Bash(mkdir:*)",
+      "WebFetch(domain:esphome.github.io)",
+      "Bash(tree:*)"
     ]
   }
 }

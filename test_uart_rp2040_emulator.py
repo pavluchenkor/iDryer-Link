@@ -59,8 +59,8 @@ def send_frame(ser, kind, payload, flags=0, sequence=0):
     ser.write(frame)
     print(f"[SEND] Kind=0x{kind:02X}, Seq={sequence}, Len={payload_len}, CRC=0x{crc:04X}")
 
-    # Ждем ответ от ESP
-    time.sleep(0.1)
+    # Ждем ответ от ESP (может быть долгим если provision)
+    time.sleep(2.0)
     if ser.in_waiting:
         print(f"[RECV] {ser.in_waiting} bytes from ESP")
         data = ser.read(ser.in_waiting)

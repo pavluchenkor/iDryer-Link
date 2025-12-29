@@ -13,6 +13,7 @@ import threading
 import select
 import termios
 import tty
+import argparse
 from datetime import datetime
 from dataclasses import dataclass
 from typing import Optional
@@ -64,12 +65,13 @@ def crc16_ccitt(data):
 def send_frame(ser, kind, payload, flags=0, sequence=0):
     """Отправка фрейма по UART"""
     payload_len = len(payload)
+    sequence = sequence % 256  # Ограничиваем 0-255
     header = struct.pack('BBBBBB', SOF, PROTOCOL_VERSION, flags, kind, sequence, payload_len)
     crc_data = header + payload
     crc = crc16_ccitt(crc_data)
     frame = header + payload + struct.pack('<H', crc)
     ser.write(frame)
-    return sequence + 1
+    return (sequence + 1) % 256  # Ограничиваем возврат
 
 # ============================================================
 # ФИЗИЧЕСКАЯ МОДЕЛЬ СУШИЛКИ
@@ -160,14 +162,23 @@ class DryerPhysics:
 # СИМУЛЯТОР СУШИЛКИ
 # ============================================================
 class DryerSimulator:
-    def __init__(self, port: str):
+    def __init__(self, port: str, units_count: int = 1, rfid_unit: int = 1):
         self.port = port
+        self.units_count = units_count
+        self.rfid_unit = rfid_unit  # К какому юниту привязана RFID метка (1-based)
         self.ser = None
         self.sequence = 1
         self.physics = DryerPhysics()
         self.running = True
         self.boot_time = time.time()
-        self.rfid_tag = "DEADBEEF12345678"
+
+        # 3 разных RFID метки для тестирования
+        self.rfid_tags = {
+            1: "DEADBEEF12345678",  # Метка для юнита 1
+            2: "CAFEBABE87654321",  # Метка для юнита 2
+            3: "FACADE0123456789",  # Метка для юнита 3
+        }
+        self.rfid_tag = self.rfid_tags.get(rfid_unit, self.rfid_tags[1])
 
         # Буфер для приёма UART
         self.rx_buffer = bytearray()
@@ -209,103 +220,133 @@ class DryerSimulator:
     # --------------------------------------------------------
     def send_hello(self):
         """Hello от RP2040"""
-        payload = struct.pack('<BII8s',
+        payload = struct.pack('<BII8sB3s',
             0x01,  # Role::RpController
             0x010000,  # version 1.0.0
             int(time.time() - self.boot_time),  # uptime
-            b'v1.0\x00\x00\x00\x00'
+            b'v1.0\x00\x00\x00\x00',  # hardwareVersion
+            self.units_count,  # unitsCount
+            b'\x00\x00\x00'  # reserved[3]
         )
         self.sequence = send_frame(self.ser, MSG_HELLO, payload, flags=0, sequence=self.sequence)
-        self.log("→ Hello sent", color='cyan')
+        self.log(f"→ Hello sent (unitsCount={self.units_count})", color='green')
 
     def send_telemetry(self):
         """Telemetry от RP2040"""
-        count = 1  # 1 unit
         entries = []
 
         # TelemetryEntry: unitId(1) + temperatureC10(2) + humidityPct(1) + heaterPowerPct(1) + fanOn(1)
-        entries.append(struct.pack('<BhBBB',
-            0,  # unitId
-            int(self.physics.temperature * 10),  # temperatureC10
-            int(self.physics.humidity),  # humidityPct
-            self.physics.heater_power,  # heaterPowerPct
-            1 if self.physics.fan_on else 0  # fanOn
-        ))
+        for unit_id in range(self.units_count):
+            # Уникальные базовые смещения для каждого юнита (чтобы графики не сливались)
+            temp_offset = unit_id * 5.0  # 0°C, 5°C, 10°C, 15°C для юнитов 1-4
+            humidity_offset = unit_id * 10.0  # 0%, 10%, 20%, 30% для юнитов 1-4
+
+            entries.append(struct.pack('<BhBBB',
+                unit_id,  # unitId
+                int((self.physics.temperature + temp_offset) * 10),  # temperatureC10
+                int(min(100, self.physics.humidity + humidity_offset)),  # humidityPct (cap at 100%)
+                self.physics.heater_power,  # heaterPowerPct
+                1 if self.physics.fan_on else 0  # fanOn
+            ))
 
         # Дополняем до 4 записей
         while len(entries) < 4:
             entries.append(struct.pack('<BhBBB', 0, 0, 0, 0, 0))
 
-        payload = struct.pack('<B', count) + b''.join(entries)
+        payload = struct.pack('<B', self.units_count) + b''.join(entries)
         self.sequence = send_frame(self.ser, MSG_TELEMETRY, payload, flags=FLAG_ACK_REQUIRED, sequence=self.sequence)
 
-        self.log(f"→ Telemetry: {self.physics.temperature:.1f}°C, {self.physics.humidity:.1f}%, heater={self.physics.heater_power}%", color='green')
+        # Показываем диапазон значений для всех юнитов
+        if self.units_count > 1:
+            temp_range = f"{self.physics.temperature:.1f}-{self.physics.temperature + (self.units_count - 1) * 5:.1f}°C"
+            hum_range = f"{self.physics.humidity:.1f}-{min(100, self.physics.humidity + (self.units_count - 1) * 10):.1f}%"
+            self.log(f"→ Telemetry: {self.units_count} unit(s), T={temp_range}, H={hum_range}, heater={self.physics.heater_power}%", color='green')
+        else:
+            self.log(f"→ Telemetry: {self.units_count} unit(s), {self.physics.temperature:.1f}°C, {self.physics.humidity:.1f}%, heater={self.physics.heater_power}%", color='green')
 
     def send_weights(self):
         """Weights от RP2040"""
-        count = 1
         entries = []
 
         # WeightEntry: sensorId(1) + unitId(1) + weightGrams(2)
-        entries.append(struct.pack('<BBH',
-            0,  # sensorId
-            0,  # unitId
-            int(self.physics.weight)  # weightGrams
-        ))
+        for unit_id in range(self.units_count):
+            # Уникальное смещение веса для каждого юнита (чтобы графики не сливались)
+            weight_offset = unit_id * 50.0  # 0г, 50г, 100г, 150г для юнитов 1-4
+
+            entries.append(struct.pack('<BBH',
+                unit_id,  # sensorId
+                unit_id,  # unitId
+                int(self.physics.weight + weight_offset)  # weightGrams
+            ))
 
         while len(entries) < 4:
             entries.append(struct.pack('<BBH', 0, 0, 0))
 
-        payload = struct.pack('<B', count) + b''.join(entries)
+        payload = struct.pack('<B', self.units_count) + b''.join(entries)
         self.sequence = send_frame(self.ser, MSG_WEIGHTS, payload, flags=0, sequence=self.sequence)
 
-        self.log(f"→ Weight: {self.physics.weight:.1f}g", color='yellow')
+        # Показываем диапазон весов для всех юнитов
+        if self.units_count > 1:
+            weight_range = f"{self.physics.weight:.1f}-{self.physics.weight + (self.units_count - 1) * 50:.1f}g"
+            self.log(f"→ Weight: {self.units_count} unit(s), {weight_range}", color='green')
+        else:
+            self.log(f"→ Weight: {self.units_count} unit(s), {self.physics.weight:.1f}g", color='green')
 
     def send_status(self):
         """Status от RP2040"""
-        count = 1
         entries = []
 
         remaining_sec = max(0, self.physics.target_duration * 60 - self.physics.elapsed_seconds)
 
         # StatusEntry: 30 байт
-        entry = struct.pack('<BBIHHH IIII BB',
-            0,  # unitId
-            self.physics.mode,  # mode (0=IDLE, 1=DRYING)
-            self.physics.session_num,  # sessionNum
-            int(self.physics.target_temp * 10),  # targetTempC10
-            self.physics.target_humidity,  # targetHumidityPct
-            self.physics.target_duration,  # durationMinutes
-            self.physics.elapsed_seconds,  # elapsedSeconds
-            0,  # stageElapsedSeconds
-            0,  # stageRemainingSeconds
-            remaining_sec,  # totalRemainingSeconds
-            0,  # currentStage
-            0   # totalStages
-        )
-        entries.append(entry)
+        for unit_id in range(self.units_count):
+            # Генерируем уникальный sessionNum для каждого юнита
+            # Формат: базовый номер (YMMDDHHmm) + номер юнита (1-based)
+            # Пример: 5122914321 для юнита 1, 5122914322 для юнита 2
+            unique_session_num = self.physics.session_num * 10 + (unit_id + 1) if self.physics.session_num > 0 else 0
+
+            entry = struct.pack('<BBIHHH IIII BB',
+                unit_id,  # unitId
+                self.physics.mode,  # mode (0=IDLE, 1=DRYING)
+                unique_session_num,  # sessionNum (уникальный для каждого юнита)
+                int(self.physics.target_temp * 10),  # targetTempC10
+                self.physics.target_humidity,  # targetHumidityPct
+                self.physics.target_duration,  # durationMinutes
+                self.physics.elapsed_seconds,  # elapsedSeconds
+                0,  # stageElapsedSeconds
+                0,  # stageRemainingSeconds
+                remaining_sec,  # totalRemainingSeconds
+                0,  # currentStage
+                0   # totalStages
+            )
+            entries.append(entry)
 
         while len(entries) < 4:
             entries.append(b'\x00' * 30)
 
         uptime = int(time.time() - self.boot_time)
-        payload = struct.pack('<B', count) + b''.join(entries) + struct.pack('<I', uptime)
+        payload = struct.pack('<B', self.units_count) + b''.join(entries) + struct.pack('<I', uptime)
         self.sequence = send_frame(self.ser, MSG_STATUS, payload, flags=0, sequence=self.sequence)
 
         mode_name = "DRYING" if self.physics.mode == 1 else "IDLE"
-        self.log(f"→ Status: {mode_name} (session #{self.physics.session_num}, elapsed={self.physics.elapsed_seconds}s)", color='blue')
+        if self.physics.session_num > 0:
+            session_range = f"{self.physics.session_num * 10 + 1}-{self.physics.session_num * 10 + self.units_count}"
+            self.log(f"→ Status: {self.units_count} unit(s), {mode_name} (sessions #{session_range}, elapsed={self.physics.elapsed_seconds}s)", color='green')
+        else:
+            self.log(f"→ Status: {self.units_count} unit(s), {mode_name} (elapsed={self.physics.elapsed_seconds}s)", color='green')
 
     def send_rfid(self):
         """RFID Event от RP2040"""
+        unit_id = self.rfid_unit - 1  # Преобразуем 1-based в 0-based
         payload = struct.pack('<BB32sB2s',
             1,  # event (TagDetected)
-            0,  # readerId
+            unit_id,  # readerId (используем как ID считывателя = unit_id)
             self.rfid_tag.ljust(32, '\x00').encode('utf-8'),  # tag
-            0,  # unitId
+            unit_id,  # unitId (0-based: 0=U1, 1=U2, 2=U3)
             b'\x00\x00'  # padding
         )
         self.sequence = send_frame(self.ser, MSG_RFID, payload, flags=0, sequence=self.sequence)
-        self.log(f"→ RFID: {self.rfid_tag}", color='cyan')
+        self.log(f"→ RFID: {self.rfid_tag} (unit={self.rfid_unit})", color='green')
 
     def send_heartbeat(self):
         """Heartbeat от RP2040"""
@@ -334,7 +375,13 @@ class DryerSimulator:
             humidity = humidity or 15
             program_name = f"Custom {temp}°C"
 
-        self.physics.session_num += 1
+        # Генерируем уникальный номер сессии на основе текущего времени
+        # Формат: месяц + день + час + минута (базовый, без unit_id)
+        # unit_id добавляется при отправке status для каждого юнита
+        # Пример: 12291459 для 29 декабря 14:59
+        now = time.localtime()
+        self.physics.session_num = int(f"{now.tm_mon:02d}{now.tm_mday:02d}{now.tm_hour:02d}{now.tm_min:02d}")
+
         self.physics.mode = 1  # DRYING
         self.physics.target_temp = temp
         self.physics.target_duration = duration
@@ -344,7 +391,7 @@ class DryerSimulator:
         self.physics.elapsed_seconds = 0
         self.physics.initial_weight = self.physics.weight
 
-        self.log(f"🔥 Started {program_name}: {temp}°C, {duration}min (session #{self.physics.session_num})", color='red')
+        self.log(f"🔥 Started {program_name}: {temp}°C, {duration}min (session base #{self.physics.session_num})", color='red')
         self.send_status()
 
     def stop_drying(self):
@@ -374,7 +421,9 @@ class DryerSimulator:
         if data[0] != SOF or data[1] != PROTOCOL_VERSION:
             return
 
+        flags = data[2]
         msg_kind = data[3]
+        sequence = data[4]
         payload_len = data[5]
 
         # Проверяем что весь фрейм получен
@@ -393,12 +442,29 @@ class DryerSimulator:
         payload = data[6:6 + payload_len]
 
         # Обработка по типу сообщения
-        if msg_kind == MSG_COMMAND:
-            # Парсим CommandPayload (10 bytes):
-            # command(1) + targetState(1) + arg0(4) + arg1(4)
-            if payload_len >= 10:
-                cmd_code, target_state = struct.unpack('<BB', payload[0:2])
-                arg0, arg1 = struct.unpack('<II', payload[2:10])
+        if msg_kind == MSG_HELLO:
+            # Парсим HelloPayload от ESP32
+            if payload_len >= 18:
+                role = payload[0]
+                role_names = {0: "UNKNOWN", 1: "RpController", 2: "EspBridge"}
+                self.log(f"← Hello from ESP32 (role={role_names.get(role, role)})", color='blue')
+
+                # Отправляем HelloAck в ответ
+                # HelloAckPayload: ipAddress(4) + ssid(32)
+                ack_payload = struct.pack('<I32s',
+                    0,  # ipAddress (0 = не подключен)
+                    b'\x00' * 32  # ssid (пустой)
+                )
+                self.sequence = send_frame(self.ser, MSG_HELLO_ACK, ack_payload, flags=0x02, sequence=self.sequence)
+                self.log(f"→ HelloAck sent", color='green')
+
+        elif msg_kind == MSG_COMMAND:
+            # Парсим CommandPayload (13 bytes):
+            # command(1) + targetState(1) + unitId(1) + reserved[2](2) + arg0(4) + arg1(4)
+            if payload_len >= 13:
+                cmd_code, target_state, unit_id = struct.unpack('<BBB', payload[0:3])
+                # reserved[2] пропускаем (payload[3:5])
+                arg0, arg1 = struct.unpack('<II', payload[5:13])
 
                 cmd_names = {0: 'NONE', 1: 'START', 2: 'STOP', 3: 'PAUSE', 4: 'RESUME', 5: 'SET_CONFIG'}
                 cmd_name = cmd_names.get(cmd_code, f'UNKNOWN({cmd_code})')
@@ -407,7 +473,8 @@ class DryerSimulator:
                 temp_c = arg0 / 10.0 if arg0 > 0 else 55
                 duration_min = arg1 if arg1 > 0 else 240
 
-                self.log(f"← Command: {cmd_name} (targetState={target_state}, temp={temp_c}°C, duration={duration_min}min)", color='cyan')
+                unit_str = f"U{unit_id + 1}" if unit_id < 4 else "ALL"
+                self.log(f"← Command: {cmd_name} unitId={unit_str} (targetState={target_state}, temp={temp_c}°C, duration={duration_min}min)", color='blue')
 
                 # Обработка команды
                 if cmd_code == 1:  # START
@@ -415,14 +482,14 @@ class DryerSimulator:
                 elif cmd_code == 2:  # STOP
                     self.stop_drying()
 
-            # Отправляем ACK
-            ack_payload = struct.pack('<BB', 0, 0)  # ackSequence=0, status=None
+            # Отправляем ACK с правильным ackSequence
+            ack_payload = struct.pack('<BB', sequence, 0)  # ackSequence=sequence из команды, status=None
             self.sequence = send_frame(self.ser, MSG_COMMAND_ACK, ack_payload, sequence=self.sequence)
 
         elif msg_kind == MSG_CONFIG:
-            self.log("← Config received from ESP", color='cyan')
-            # Отправляем ACK
-            ack_payload = struct.pack('<BB', 0, 0)
+            self.log("← Config received from ESP", color='blue')
+            # Отправляем ACK с правильным ackSequence
+            ack_payload = struct.pack('<BB', sequence, 0)
             self.sequence = send_frame(self.ser, MSG_CONFIG_ACK, ack_payload, sequence=self.sequence)
 
         elif msg_kind == MSG_CLAIM_STATUS:
@@ -431,13 +498,13 @@ class DryerSimulator:
                 pin = payload[1:10].decode('utf-8', errors='ignore').rstrip('\x00')
                 remaining = struct.unpack('<I', payload[14:18])[0]
                 status_names = {0: "IDLE", 1: "PROVISIONING", 2: "WAITING_CLAIM", 3: "CLAIMED", 4: "ERROR"}
-                self.log(f"← ClaimStatus: {status_names.get(status, status)} PIN=\"{pin}\" expires_in={remaining}s", color='green')
+                self.log(f"← ClaimStatus: {status_names.get(status, status)} PIN=\"{pin}\" expires_in={remaining}s", color='blue')
 
         elif msg_kind == MSG_CLAIM_COMPLETE:
             if payload_len >= 38:
                 success = payload[0]
                 device_id = payload[1:37].decode('utf-8', errors='ignore').rstrip('\x00')
-                self.log(f"← ClaimComplete: success={success} deviceId=\"{device_id}\"", color='green')
+                self.log(f"← ClaimComplete: success={success} deviceId=\"{device_id}\"", color='blue')
 
     def handle_incoming(self):
         """Обработка входящих сообщений от ESP32 с буферизацией"""
@@ -446,7 +513,7 @@ class DryerSimulator:
             new_data = self.ser.read(self.ser.in_waiting)
             # DEBUG: показываем что пришло
             hex_str = ' '.join(f'{b:02X}' for b in new_data)
-            self.log(f"[RX] {len(new_data)} bytes: {hex_str}", color='yellow')
+            # self.log(f"[RX] {len(new_data)} bytes: {hex_str}", color='yellow')
             self.rx_buffer.extend(new_data)
 
         # Ищем и обрабатываем фреймы
@@ -499,8 +566,9 @@ class DryerSimulator:
         last_heartbeat = time.time()
         last_physics = time.time()
         last_weights = time.time()
+        last_rfid = time.time()
 
-        self.log("Simulator running. Press 1-5 to start program, S to stop, Q to quit", color='cyan')
+        self.log("Simulator running. Press 1-5 to start program, S to stop, R for RFID, Q to quit", color='cyan')
 
         while self.running:
             now = time.time()
@@ -524,6 +592,11 @@ class DryerSimulator:
             if now - last_weights >= 15.0:
                 self.send_weights()
                 last_weights = now
+
+            # Отправка RFID (каждые 30 секунд)
+            if now - last_rfid >= 30.0:
+                self.send_rfid()
+                last_rfid = now
 
             # Обработка входящих сообщений от ESP
             self.handle_incoming()
@@ -553,6 +626,8 @@ def keyboard_listener(simulator: DryerSimulator):
                     simulator.log("Quitting...", color='red')
                 elif key == 's':
                     simulator.stop_drying()
+                elif key == 'r':
+                    simulator.send_rfid()
                 elif key in '12345':
                     simulator.start_drying(key)
     finally:
@@ -562,17 +637,28 @@ def keyboard_listener(simulator: DryerSimulator):
 # MAIN
 # ============================================================
 def main():
-    if len(sys.argv) < 2:
-        print("Usage: python3 dryer_simulator.py <SERIAL_PORT>")
-        print("Example: python3 dryer_simulator.py /dev/ttyUSB0")
-        sys.exit(1)
+    parser = argparse.ArgumentParser(description='iDryer RP2040 Simulator - Физическая модель сушилки')
+    parser.add_argument('port', help='Serial port (e.g., /dev/ttyUSB0)')
+    parser.add_argument('-u', '--units', type=int, default=1, choices=[1, 2, 3],
+                        help='Количество камер сушилки (1-3, по умолчанию: 1)')
+    parser.add_argument('-r', '--rfid-unit', type=int, default=1, choices=[1, 2, 3],
+                        help='Номер юнита для RFID метки (1-3, по умолчанию: 1)')
 
-    port = sys.argv[1]
+    args = parser.parse_args()
 
-    print("""
+    # RFID метки
+    rfid_tags = {
+        1: "DEADBEEF12345678",
+        2: "CAFEBABE87654321",
+        3: "FACADE0123456789",
+    }
+
+    print(f"""
 ╔═══════════════════════════════════════════════════════╗
 ║      iDryer RP2040 (Сушилка) Simulator v1.0          ║
 ║      Физическая модель + интерактивное управление     ║
+║      Камер: {args.units}  |  RFID юнит: {args.rfid_unit}                      ║
+║      RFID метка: {rfid_tags[args.rfid_unit]}               ║
 ╚═══════════════════════════════════════════════════════╝
 
 📋 Программы сушки:
@@ -585,15 +671,17 @@ def main():
 ⌨️  Управление:
   1-5 - Запуск программы
   S   - Стоп (IDLE)
+  R   - Отправить RFID событие
   Q   - Выход
 
 🔄 Автоматическая отправка:
   - Telemetry (каждые 5 сек)
   - Heartbeat (каждые 10 сек)
   - Weights (каждые 15 сек)
+  - RFID (каждые 30 сек)
 """)
 
-    simulator = DryerSimulator(port)
+    simulator = DryerSimulator(args.port, args.units, args.rfid_unit)
 
     if not simulator.connect():
         sys.exit(1)
