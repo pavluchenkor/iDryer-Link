@@ -162,23 +162,24 @@ class DryerPhysics:
 # СИМУЛЯТОР СУШИЛКИ
 # ============================================================
 class DryerSimulator:
-    def __init__(self, port: str, units_count: int = 1, rfid_unit: int = 1):
+    def __init__(self, port: str, units_count: int = 1, readers_count: int = 0):
         self.port = port
         self.units_count = units_count
-        self.rfid_unit = rfid_unit  # К какому юниту привязана RFID метка (1-based)
+        # Если readers_count не задан (0), используем количество юнитов
+        self.readers_count = readers_count if readers_count > 0 else units_count
         self.ser = None
         self.sequence = 1
         self.physics = DryerPhysics()
         self.running = True
         self.boot_time = time.time()
 
-        # 3 разных RFID метки для тестирования
+        # 4 RFID метки для тестирования (по одной на каждый ридер)
         self.rfid_tags = {
-            1: "DEADBEEF12345678",  # Метка для юнита 1
-            2: "CAFEBABE87654321",  # Метка для юнита 2
-            3: "FACADE0123456789",  # Метка для юнита 3
+            1: "DEADBEEF12345678",  # Метка для ридера 1
+            2: "CAFEBABE87654321",  # Метка для ридера 2
+            3: "FACADE0123456789",  # Метка для ридера 3
+            4: "ABCD123456789EF0",  # Метка для ридера 4
         }
-        self.rfid_tag = self.rfid_tags.get(rfid_unit, self.rfid_tags[1])
 
         # Буфер для приёма UART
         self.rx_buffer = bytearray()
@@ -336,17 +337,22 @@ class DryerSimulator:
             self.log(f"→ Status: {self.units_count} unit(s), {mode_name} (elapsed={self.physics.elapsed_seconds}s)", color='green')
 
     def send_rfid(self):
-        """RFID Event от RP2040"""
-        unit_id = self.rfid_unit - 1  # Преобразуем 1-based в 0-based
-        payload = struct.pack('<BB32sB2s',
-            1,  # event (TagDetected)
-            unit_id,  # readerId (используем как ID считывателя = unit_id)
-            self.rfid_tag.ljust(32, '\x00').encode('utf-8'),  # tag
-            unit_id,  # unitId (0-based: 0=U1, 1=U2, 2=U3)
-            b'\x00\x00'  # padding
-        )
-        self.sequence = send_frame(self.ser, MSG_RFID, payload, flags=0, sequence=self.sequence)
-        self.log(f"→ RFID: {self.rfid_tag} (unit={self.rfid_unit})", color='green')
+        """RFID Event от RP2040 - отправляем метку для каждого ридера"""
+        for reader_id in range(self.readers_count):
+            # Выбираем метку для текущего ридера (1-based)
+            tag = self.rfid_tags.get(reader_id + 1, self.rfid_tags[1])
+            # unitId привязываем к ридеру (или к юниту если ридеров меньше)
+            unit_id = reader_id % self.units_count
+
+            payload = struct.pack('<BB32sB2s',
+                1,  # event (TagDetected)
+                reader_id,  # readerId (0-based)
+                tag.ljust(32, '\x00').encode('utf-8'),  # tag
+                unit_id,  # unitId (0-based: 0=U1, 1=U2, ...)
+                b'\x00\x00'  # padding
+            )
+            self.sequence = send_frame(self.ser, MSG_RFID, payload, flags=0, sequence=self.sequence)
+            self.log(f"→ RFID: R{reader_id + 1} → U{unit_id + 1} tag={tag}", color='green')
 
     def send_heartbeat(self):
         """Heartbeat от RP2040"""
@@ -628,6 +634,8 @@ def keyboard_listener(simulator: DryerSimulator):
                     simulator.stop_drying()
                 elif key == 'r':
                     simulator.send_rfid()
+                elif key == 'h':
+                    simulator.send_hello()
                 elif key in '12345':
                     simulator.start_drying(key)
     finally:
@@ -639,26 +647,34 @@ def keyboard_listener(simulator: DryerSimulator):
 def main():
     parser = argparse.ArgumentParser(description='iDryer RP2040 Simulator - Физическая модель сушилки')
     parser.add_argument('port', help='Serial port (e.g., /dev/ttyUSB0)')
-    parser.add_argument('-u', '--units', type=int, default=1, choices=[1, 2, 3],
-                        help='Количество камер сушилки (1-3, по умолчанию: 1)')
-    parser.add_argument('-r', '--rfid-unit', type=int, default=1, choices=[1, 2, 3],
-                        help='Номер юнита для RFID метки (1-3, по умолчанию: 1)')
+    parser.add_argument('-u', '--units', type=int, default=1, choices=[1, 2, 3, 4],
+                        help='Количество камер сушилки (1-4, по умолчанию: 1)')
+    parser.add_argument('-r', '--readers', type=int, default=0, choices=[0, 1, 2, 3, 4],
+                        help='Количество RFID ридеров (1-4, по умолчанию: равно units)')
 
     args = parser.parse_args()
 
-    # RFID метки
+    # Количество ридеров по умолчанию = количество юнитов
+    readers_count = args.readers if args.readers > 0 else args.units
+
+    # RFID метки (автоматически привязываются к ридерам)
     rfid_tags = {
         1: "DEADBEEF12345678",
         2: "CAFEBABE87654321",
         3: "FACADE0123456789",
+        4: "ABCD123456789EF0",
     }
+
+    rfid_info = ""
+    for i in range(1, readers_count + 1):
+        unit_id = ((i - 1) % args.units) + 1
+        rfid_info += f"\n║      R{i} → U{unit_id}: {rfid_tags[i]:<34} ║"
 
     print(f"""
 ╔═══════════════════════════════════════════════════════╗
 ║      iDryer RP2040 (Сушилка) Simulator v1.0          ║
 ║      Физическая модель + интерактивное управление     ║
-║      Камер: {args.units}  |  RFID юнит: {args.rfid_unit}                      ║
-║      RFID метка: {rfid_tags[args.rfid_unit]}               ║
+║      Камер: {args.units}, RFID ридеров: {readers_count:<30} ║{rfid_info}
 ╚═══════════════════════════════════════════════════════╝
 
 📋 Программы сушки:
@@ -671,17 +687,18 @@ def main():
 ⌨️  Управление:
   1-5 - Запуск программы
   S   - Стоп (IDLE)
-  R   - Отправить RFID событие
+  H   - Отправить Hello
+  R   - Отправить RFID события
   Q   - Выход
 
 🔄 Автоматическая отправка:
   - Telemetry (каждые 5 сек)
   - Heartbeat (каждые 10 сек)
   - Weights (каждые 15 сек)
-  - RFID (каждые 30 сек)
+  - RFID (каждые 30 сек, для всех юнитов)
 """)
 
-    simulator = DryerSimulator(args.port, args.units, args.rfid_unit)
+    simulator = DryerSimulator(args.port, args.units, readers_count)
 
     if not simulator.connect():
         sys.exit(1)
