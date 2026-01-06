@@ -1,0 +1,7 @@
+{
+    "name": "idryer-menu",
+    "version": "1.0.0",
+    "description": "Menu data structure (auto-copied from RP2040 project)",
+    "frameworks": "*",
+    "platforms": "*"
+}

@@ -1,0 +1,56 @@
+{
+  "_info": "Легенда для тестирования JSON протокола между MCU и LINK",
+
+  "full_config_format": {
+    "v": "версия структуры меню",
+    "units": "количество юнитов (1-4)",
+    "active": "активный юнит (0-based)",
+    "lang": "язык (ru, en)",
+    "menu": [
+      {"id": "ID элемента", "t": "val|tog", "val": "значение или массив"}
+    ]
+  },
+
+  "delta_format": {
+    "d": {
+      "3": "[55,70,90] — per-unit значение",
+      "81": "42 — global значение"
+    }
+  },
+
+  "commands_link_to_mcu": {
+    "set": "{\"cmd\":\"set\",\"id\":3,\"unit\":0,\"val\":55.0}",
+    "invoke": "{\"cmd\":\"invoke\",\"id\":5}",
+    "get_config": "{\"cmd\":\"get_config\"}",
+    "set_active": "{\"cmd\":\"set_active\",\"unit\":1}"
+  },
+
+  "key_ids": {
+    "1": "CONTROLLER (global)",
+    "3": "DRY_TEMP °C (per-unit)",
+    "4": "DRY_TIME min (per-unit)",
+    "5": "DRY_START (action)",
+    "7": "STORAGE_TEMP °C (per-unit)",
+    "8": "STORAGE_HUMIDITY %RH (per-unit)",
+    "9": "STORAGE_BY_HUMIDITY (per-unit toggle)",
+    "10": "STORAGE_START (action)",
+    "13": "PRESET_PLA_TEMP (global)",
+    "14": "PRESET_PLA_TIME (global)",
+    "81": "SCALES_COUNT (global)",
+    "102": "AUTO_STORAGE (per-unit toggle)",
+    "103": "AUTO_DRY (per-unit toggle)",
+    "112": "PID_HEATER_KP (per-unit)",
+    "143": "UNITS_COUNT (global)",
+    "144": "LANGUAGE 0=ru,1=en (global)"
+  },
+
+  "scope": {
+    "global": "val: 42",
+    "per-unit": "val: [50, 65, 85]"
+  },
+
+  "types": {
+    "val": "числовое значение",
+    "tog": "toggle (true/false)"
+  }
+}

@@ -15,7 +15,13 @@
 #include <platform/arduino/idryer_arduino.h>
 #include <ArduinoJson.h>
 
+// Menu библиотека для кэширования конфига
+#include <menu_commands.h>
+#include <menu_cache.h>
+#include <menu_meta.h>
+
 #include "secrets_config.h"
+#include "version.h"
 
 // Используем namespace'ы библиотеки
 using namespace DryerUart;
@@ -23,272 +29,398 @@ using namespace idryer;
 using namespace idryer::hal;
 
 // Раскомментируйте для включения Improv Wi-Fi (настройка через браузер)
-// #define ENABLE_IMPROV_WIFI
+// ВАЖНО: При ENABLE_IMPROV_WIFI debug логи отключаются (Serial нужен для Improv протокола)
+#define ENABLE_IMPROV_WIFI
 
 #ifdef ENABLE_IMPROV_WIFI
 #include <ImprovWiFiLibrary.h>
 #include <Preferences.h>
-#endif
-
+// Improv использует Serial для бинарного протокола - отключаем debug логи
+#define DEBUG_LOG(...)
+#define DEBUG_JSON(doc)
+#define ANSI_RESET ""
+#define ANSI_BLUE ""
+#define ANSI_GREEN ""
+#else
+// Без Improv - включаем debug логи
 #ifdef DEBUG_SERIAL
-// ANSI цветовые коды для терминала
 #define ANSI_RESET "\033[0m"
 #define ANSI_BLUE "\033[34m"
 #define ANSI_GREEN "\033[32m"
-
 #define DEBUG_LOG(...) DEBUG_SERIAL.printf(__VA_ARGS__)
-#define DEBUG_JSON(doc)             \
-  serializeJson(doc, DEBUG_SERIAL); \
-  DEBUG_SERIAL.println();
+#define DEBUG_JSON(doc)               \
+    serializeJson(doc, DEBUG_SERIAL); \
+    DEBUG_SERIAL.println();
 #else
 #define DEBUG_LOG(...)
 #define DEBUG_JSON(doc)
+#endif
 #endif
 
 namespace
 {
 
-// ESP32-C3 UART пины для связи с RP2040
-constexpr int UART_RX_PIN = 6;
-constexpr int UART_TX_PIN = 7;
+    // ESP32-C3 UART пины для связи с RP2040
+    constexpr int UART_RX_PIN = 6;
+    constexpr int UART_TX_PIN = 7;
 
 #ifdef ENABLE_IMPROV_WIFI
-Preferences preferences;
-ImprovWiFi improvSerial(&Serial);
-bool wifiConfigured = false;
+    Preferences preferences;
+    ImprovWiFi improvSerial(&Serial);
+    bool wifiConfigured = false;
+    bool logsEnabled = false; // Логи включаются после настройки WiFi
 
-void saveWiFiCredentials(const char *ssid, const char *password)
-{
-    preferences.begin("wifi", false);
-    preferences.putString("ssid", ssid);
-    preferences.putString("password", password);
-    preferences.putBool("configured", true);
-    preferences.end();
-    DEBUG_LOG("[IMPROV] WiFi credentials saved\n");
-}
-
-bool loadWiFiCredentials(String &ssid, String &password)
-{
-    preferences.begin("wifi", true);
-    bool configured = preferences.getBool("configured", false);
-    if (configured)
+    void saveWiFiCredentials(const char *ssid, const char *password)
     {
-        ssid = preferences.getString("ssid", "");
-        password = preferences.getString("password", "");
+        preferences.begin("wifi", false);
+        preferences.putString("ssid", ssid);
+        preferences.putString("password", password);
+        preferences.putBool("configured", true);
+        preferences.end();
+        DEBUG_LOG("[IMPROV] WiFi credentials saved\n");
     }
-    preferences.end();
-    return configured && ssid.length() > 0;
-}
 
-void clearWiFiCredentials()
-{
-    preferences.begin("wifi", false);
-    preferences.clear();
-    preferences.end();
-    DEBUG_LOG("[IMPROV] WiFi credentials cleared\n");
-}
+    bool loadWiFiCredentials(String &ssid, String &password)
+    {
+        preferences.begin("wifi", true);
+        bool configured = preferences.getBool("configured", false);
+        if (configured)
+        {
+            ssid = preferences.getString("ssid", "");
+            password = preferences.getString("password", "");
+        }
+        preferences.end();
+        return configured && ssid.length() > 0;
+    }
+
+    void clearWiFiCredentials()
+    {
+        preferences.begin("wifi", false);
+        preferences.clear();
+        preferences.end();
+        DEBUG_LOG("[IMPROV] WiFi credentials cleared\n");
+    }
 #endif
 
-constexpr uint32_t FIRMWARE_VERSION = (1u << 16); // 1.0.0
+    constexpr uint32_t FIRMWARE_VERSION = VERSION_NUMBER;
 
-// =============================================================================
-// ГЛОБАЛЬНЫЕ ОБЪЕКТЫ
-// =============================================================================
+    // =============================================================================
+    // ГЛОБАЛЬНЫЕ ОБЪЕКТЫ
+    // =============================================================================
 
-// HAL Serial для UART
-ArduinoSerial uartSerial(Serial1);
+    // HAL Serial для UART
+    ArduinoSerial uartSerial(Serial1);
 
-// Протокольные компоненты
-UartBridge uartBridge;
+    // Протокольные компоненты
+    UartBridge uartBridge;
 
-// Платформенные реализации
-ArduinoWifiManager wifiManager;
-ArduinoHttpClient httpClient;
-ArduinoCredentialStore credStore;
+    // Платформенные реализации
+    ArduinoWifiManager wifiManager;
+    ArduinoHttpClient httpClient;
+    ArduinoCredentialStore credStore;
 
-// Главный фасад устройства
-IdryerDevice device(&wifiManager, &httpClient, &credStore, &uartBridge, IDRYER_API_BASE);
+    // Главный фасад устройства
+    IdryerDevice device(&wifiManager, &httpClient, &credStore, &uartBridge, IDRYER_API_BASE);
 
 #ifdef ENABLE_IMPROV_WIFI
-void onImprovWiFiConnectCallback(const char *ssid, const char *password)
-{
-    DEBUG_LOG("[IMPROV] Received credentials - SSID: %s\n", ssid);
-    saveWiFiCredentials(ssid, password);
-    wifiManager.begin(ssid, password);
-    wifiConfigured = true;
-}
+    void onImprovWiFiConnectCallback(const char *ssid, const char *password)
+    {
+        DEBUG_LOG("[IMPROV] Received credentials - SSID: %s\n", ssid);
+        saveWiFiCredentials(ssid, password);
+        wifiManager.begin(ssid, password);
+        wifiConfigured = true;
+    }
 
-void onImprovWiFiErrorCallback(ImprovTypes::Error err)
-{
-    DEBUG_LOG("[IMPROV] Error: %d\n", err);
-}
+    void onImprovWiFiErrorCallback(ImprovTypes::Error err)
+    {
+        DEBUG_LOG("[IMPROV] Error: %d\n", err);
+    }
 #endif
 
-uint32_t lastHeartbeatAt = 0;
-uint32_t heartbeatErrors = 0;
+    uint32_t lastHeartbeatAt = 0;
+    uint32_t heartbeatErrors = 0;
 
-// =============================================================================
-// UART ОБРАБОТЧИКИ
-// =============================================================================
+    // =============================================================================
+    // UART ОБРАБОТЧИКИ
+    // =============================================================================
 
-void handleHello(const HelloPayload &payload, const FrameHeader &header)
-{
-    if (header.kind == MessageKind::Hello)
+    void handleHello(const HelloPayload &payload, const FrameHeader &header)
     {
-        HelloAckPayload response{};
-        response.ipAddress = 0;
-        response.ssid[0] = '\0';
-        uartBridge.sendHelloAck(response);
+        // IdryerDevice сам отправляет HelloAck с актуальным IP и SSID
+        device.handleRpHello(payload, header);
     }
-    device.handleRpHello(payload, header);
-}
 
-void handleTelemetry(const TelemetryPayload &payload, const FrameHeader &header)
-{
+    void handleTelemetry(const TelemetryPayload &payload, const FrameHeader &header)
+    {
 #ifdef DEBUG_SERIAL
-    DEBUG_LOG("\n" ANSI_BLUE "← Telemetry (seq=%d, count=%d)" ANSI_RESET "\n",
-              header.sequence, payload.count);
-    StaticJsonDocument<512> doc;
-    JsonArray units = doc.createNestedArray("units");
-    for (uint8_t i = 0; i < payload.count && i < 4; i++)
-    {
-        JsonObject unit = units.createNestedObject();
-        unit["unitId"] = payload.units[i].unitId;
-        unit["tempC"] = payload.units[i].temperatureC10 / 10.0;
-        unit["humidity"] = payload.units[i].humidityPct;
-    }
-    DEBUG_JSON(doc);
+        DEBUG_LOG("\n" ANSI_BLUE "← Telemetry (seq=%d, count=%d)" ANSI_RESET "\n",
+                  header.sequence, payload.count);
+        StaticJsonDocument<512> doc;
+        JsonArray units = doc.createNestedArray("units");
+        for (uint8_t i = 0; i < payload.count && i < 4; i++)
+        {
+            JsonObject unit = units.createNestedObject();
+            unit["unitId"] = payload.units[i].unitId;
+            unit["tempC"] = payload.units[i].temperatureC10 / 10.0;
+            unit["humidity"] = payload.units[i].humidityPct;
+        }
+        DEBUG_JSON(doc);
 #endif
-    device.handleTelemetry(payload, header);
-}
+        device.handleTelemetry(payload, header);
+    }
 
-void handleCommandAck(const AckPayload &payload, const FrameHeader &header)
-{
-    device.handleCommandAck(payload, header);
-    if (payload.status != ErrorCode::None)
+    void handleCommandAck(const AckPayload &payload, const FrameHeader &header)
     {
+        device.handleCommandAck(payload, header);
+        if (payload.status != ErrorCode::None)
+        {
+            heartbeatErrors++;
+        }
+    }
+
+    void handleConfigAck(const AckPayload &payload, const FrameHeader &header)
+    {
+        device.handleConfigAck(payload, header);
+        if (payload.status != ErrorCode::None)
+        {
+            heartbeatErrors++;
+        }
+    }
+
+    void handleConfigPushChunk(const ConfigChunkPayload &payload, uint8_t dataLen, const FrameHeader &header)
+    {
+#ifdef DEBUG_SERIAL
+        DEBUG_LOG("\n" ANSI_BLUE "← ConfigPush chunk (transferId=%d, chunk=%d, dataLen=%d)" ANSI_RESET "\n",
+                  payload.header.transferId, payload.header.chunkIndex, dataLen);
+#endif
+        device.handleConfigPushChunk(payload, dataLen, header);
+    }
+
+    void handleHeartbeat(const HeartbeatPayload &payload, const FrameHeader &header)
+    {
+#ifdef DEBUG_SERIAL
+        DEBUG_LOG("\n" ANSI_BLUE "← Heartbeat (seq=%d)" ANSI_RESET "\n", header.sequence);
+        StaticJsonDocument<128> doc;
+        doc["uptime"] = payload.uptimeSeconds;
+        doc["rssi"] = payload.wifiRssiDbm;
+        doc["errors"] = payload.errorsSinceBoot;
+        DEBUG_JSON(doc);
+#endif
+    }
+
+    void handleError(const ErrorPayload &payload, bool remote)
+    {
+        device.handleUartError(payload, remote);
         heartbeatErrors++;
     }
-}
 
-void handleConfigAck(const AckPayload &payload, const FrameHeader &header)
-{
-    device.handleConfigAck(payload, header);
-    if (payload.status != ErrorCode::None)
+    void handleStatus(const StatusPayload &payload, const FrameHeader &header)
     {
-        heartbeatErrors++;
-    }
-}
-
-void handleHeartbeat(const HeartbeatPayload &payload, const FrameHeader &header)
-{
 #ifdef DEBUG_SERIAL
-    DEBUG_LOG("\n" ANSI_BLUE "← Heartbeat (seq=%d)" ANSI_RESET "\n", header.sequence);
-    StaticJsonDocument<128> doc;
-    doc["uptime"] = payload.uptimeSeconds;
-    doc["rssi"] = payload.wifiRssiDbm;
-    doc["errors"] = payload.errorsSinceBoot;
-    DEBUG_JSON(doc);
+        DEBUG_LOG("\n" ANSI_BLUE "← Status (seq=%d, count=%d)" ANSI_RESET "\n",
+                  header.sequence, payload.count);
+        StaticJsonDocument<1024> doc;
+        doc["uptime"] = payload.uptime;
+        JsonArray units = doc.createNestedArray("units");
+        for (uint8_t i = 0; i < payload.count && i < 4; i++)
+        {
+            JsonObject unit = units.createNestedObject();
+            unit["unitId"] = payload.units[i].unitId;
+            unit["mode"] = static_cast<int>(payload.units[i].mode);
+            unit["sessionNum"] = payload.units[i].sessionNum;
+            unit["elapsed"] = payload.units[i].elapsedSeconds;
+            unit["remaining"] = payload.units[i].totalRemainingSeconds;
+            unit["stage"] = payload.units[i].currentStage;
+        }
+        DEBUG_JSON(doc);
 #endif
-}
-
-void handleError(const ErrorPayload &payload, bool remote)
-{
-    device.handleUartError(payload, remote);
-    heartbeatErrors++;
-}
-
-void handleStatus(const StatusPayload &payload, const FrameHeader &header)
-{
-#ifdef DEBUG_SERIAL
-    DEBUG_LOG("\n" ANSI_BLUE "← Status (seq=%d, count=%d)" ANSI_RESET "\n",
-              header.sequence, payload.count);
-    StaticJsonDocument<1024> doc;
-    doc["uptime"] = payload.uptime;
-    JsonArray units = doc.createNestedArray("units");
-    for (uint8_t i = 0; i < payload.count && i < 4; i++)
-    {
-        JsonObject unit = units.createNestedObject();
-        unit["unitId"] = payload.units[i].unitId;
-        unit["mode"] = static_cast<int>(payload.units[i].mode);
-        unit["sessionNum"] = payload.units[i].sessionNum;
-        unit["elapsed"] = payload.units[i].elapsedSeconds;
-        unit["remaining"] = payload.units[i].totalRemainingSeconds;
-        unit["stage"] = payload.units[i].currentStage;
-    }
-    DEBUG_JSON(doc);
-#endif
-    device.handleStatus(payload, header);
-}
-
-void handleWeights(const WeightsPayload &payload, const FrameHeader &header)
-{
-#ifdef DEBUG_SERIAL
-    DEBUG_LOG("\n" ANSI_BLUE "← Weights (seq=%d, count=%d)" ANSI_RESET "\n",
-              header.sequence, payload.count);
-    StaticJsonDocument<256> doc;
-    JsonArray weights = doc.createNestedArray("weights");
-    for (uint8_t i = 0; i < payload.count && i < 4; i++)
-    {
-        JsonObject w = weights.createNestedObject();
-        w["unitId"] = payload.weights[i].unitId;
-        w["weight"] = payload.weights[i].weightGrams;
-    }
-    DEBUG_JSON(doc);
-#endif
-    device.handleWeights(payload, header);
-}
-
-void handleRfid(const RfidPayload &payload, const FrameHeader &header)
-{
-#ifdef DEBUG_SERIAL
-    DEBUG_LOG("\n" ANSI_BLUE "← RFID (seq=%d)" ANSI_RESET "\n", header.sequence);
-    StaticJsonDocument<256> doc;
-    doc["event"] = static_cast<int>(payload.event);
-    doc["readerId"] = payload.readerId;
-    doc["unitId"] = payload.unitId;
-    doc["tag"] = String(payload.tag);
-    DEBUG_JSON(doc);
-#endif
-    device.handleRfidEvent(payload, header);
-}
-
-void processHeartbeat()
-{
-    const uint32_t now = millis();
-    if (now - lastHeartbeatAt < HEARTBEAT_INTERVAL_MS)
-    {
-        return;
+        device.handleStatus(payload, header);
     }
 
-    HeartbeatPayload payload{};
-    payload.uptimeSeconds = now / 1000;
-    payload.wifiRssiDbm = 0;
-    payload.errorsSinceBoot = heartbeatErrors;
-    uartBridge.sendHeartbeat(payload);
+    void handleWeights(const WeightsPayload &payload, const FrameHeader &header)
+    {
+#ifdef DEBUG_SERIAL
+        DEBUG_LOG("\n" ANSI_BLUE "← Weights (seq=%d, count=%d)" ANSI_RESET "\n",
+                  header.sequence, payload.count);
+        StaticJsonDocument<256> doc;
+        JsonArray weights = doc.createNestedArray("weights");
+        for (uint8_t i = 0; i < payload.count && i < 4; i++)
+        {
+            JsonObject w = weights.createNestedObject();
+            w["unitId"] = payload.weights[i].unitId;
+            w["weight"] = payload.weights[i].weightGrams;
+        }
+        DEBUG_JSON(doc);
+#endif
+        device.handleWeights(payload, header);
+    }
 
-    lastHeartbeatAt = now;
-}
+    void handleRfid(const RfidPayload &payload, const FrameHeader &header)
+    {
+#ifdef DEBUG_SERIAL
+        DEBUG_LOG("\n" ANSI_BLUE "← RFID (seq=%d)" ANSI_RESET "\n", header.sequence);
+        StaticJsonDocument<256> doc;
+        doc["event"] = static_cast<int>(payload.event);
+        doc["readerId"] = payload.readerId;
+        doc["unitId"] = payload.unitId;
+        doc["tag"] = String(payload.tag);
+        DEBUG_JSON(doc);
+#endif
+        device.handleRfidEvent(payload, header);
+    }
 
-void sendInitialHello()
-{
-    DEBUG_LOG(ANSI_GREEN "→ Sending Hello from ESP32..." ANSI_RESET "\n");
-    HelloPayload payload{};
-    payload.role = Role::EspBridge;
-    payload.firmwareVersion = FIRMWARE_VERSION;
-    payload.workTimeCounter = millis() / 1000;
-    strncpy(payload.hardwareVersion, "v1.0", sizeof(payload.hardwareVersion) - 1);
-    uartBridge.sendHello(payload, false);
-}
+    void processHeartbeat()
+    {
+        const uint32_t now = millis();
+        if (now - lastHeartbeatAt < HEARTBEAT_INTERVAL_MS)
+        {
+            return;
+        }
 
-void handleClaimStart(const FrameHeader &header)
-{
-    DEBUG_LOG("\n" ANSI_BLUE "← ClaimStart from RP2040 (seq=%d)" ANSI_RESET "\n",
-              header.sequence);
-    bool result = device.requestClaimProcess();
-    DEBUG_LOG("[CLAIM] requestClaimProcess() returned: %s\n",
-              result ? "true" : "false");
-}
+        HeartbeatPayload payload{};
+        payload.uptimeSeconds = now / 1000;
+        payload.wifiRssiDbm = 0;
+        payload.errorsSinceBoot = heartbeatErrors;
+        uartBridge.sendHeartbeat(payload);
+
+        lastHeartbeatAt = now;
+    }
+
+    void sendInitialHello()
+    {
+        DEBUG_LOG(ANSI_GREEN "→ Sending Hello from ESP32..." ANSI_RESET "\n");
+        HelloPayload payload{};
+        payload.role = Role::EspBridge;
+        payload.firmwareVersion = FIRMWARE_VERSION;
+        payload.workTimeCounter = millis() / 1000;
+        strncpy(payload.hardwareVersion, "v1.0", sizeof(payload.hardwareVersion) - 1);
+        uartBridge.sendHello(payload, false);
+    }
+
+    void handleClaimStart(const FrameHeader &header)
+    {
+        DEBUG_LOG("\n" ANSI_BLUE "← ClaimStart from RP2040 (seq=%d)" ANSI_RESET "\n",
+                  header.sequence);
+        bool result = device.requestClaimProcess();
+        DEBUG_LOG("[CLAIM] requestClaimProcess() returned: %s\n",
+                  result ? "true" : "false");
+    }
+
+    // =============================================================================
+    // MENU CONFIG CALLBACK
+    // =============================================================================
+
+    // Рекурсивный вывод меню с отступами
+    void printMenuItem(uint16_t id, int depth)
+    {
+        const MenuMeta *meta = menu_meta_get(id);
+        if (!meta)
+            return;
+
+        // Отступ по глубине
+        for (int i = 0; i < depth; i++)
+            DEBUG_LOG("  ");
+
+        // Название (lang: 0=RU, 1=EN)
+        uint8_t lang = g_menu_cache.getLang();
+        const char *name = meta->title[lang] ? meta->title[lang] : "?";
+        const char *unit = meta->unit[lang] ? meta->unit[lang] : "";
+
+        switch (meta->type)
+        {
+        case META_SUBMENU:
+            DEBUG_LOG("[%s]\n", name);
+            // Ищем детей по parent (т.к. children не последовательные)
+            for (uint16_t childId = 0; childId < MENU_META_COUNT; childId++)
+            {
+                const MenuMeta *child = menu_meta_get(childId);
+                if (child && child->parent == (int16_t)id)
+                {
+                    printMenuItem(childId, depth + 1);
+                }
+            }
+            break;
+
+        case META_ACTION:
+            DEBUG_LOG("%s (action)\n", name);
+            break;
+
+        case META_VALUE:
+        case META_TOGGLE:
+            if (meta->scope == META_SCOPE_GLOBAL)
+            {
+                if (meta->type == META_TOGGLE)
+                {
+                    DEBUG_LOG("%s = %s\n", name,
+                              g_menu_cache.getBool(id, 0) ? "ON" : "OFF");
+                }
+                else
+                {
+                    DEBUG_LOG("%s = %.1f %s\n", name,
+                              g_menu_cache.getFloat(id, 0), unit);
+                }
+            }
+            else
+            {
+                DEBUG_LOG("%s = [", name);
+                for (uint8_t u = 0; u < g_menu_cache.getUnitsCount(); u++)
+                {
+                    if (u > 0)
+                        DEBUG_LOG(", ");
+                    if (meta->type == META_TOGGLE)
+                    {
+                        DEBUG_LOG("%s", g_menu_cache.getBool(id, u) ? "ON" : "OFF");
+                    }
+                    else
+                    {
+                        DEBUG_LOG("%.1f", g_menu_cache.getFloat(id, u));
+                    }
+                }
+                DEBUG_LOG("] %s\n", unit);
+            }
+            break;
+        }
+    }
+
+    void printMenuCache()
+    {
+        DEBUG_LOG("\n--- MENU CACHE ---\n");
+        DEBUG_LOG("Version: %d, Units: %d, Active: %d, Lang: %s\n\n",
+                  g_menu_cache.revision,
+                  g_menu_cache.getUnitsCount(),
+                  g_menu_cache.active_unit,
+                  g_menu_cache.getLang() == 0 ? "RU" : "EN");
+
+        printMenuItem(0, 0);
+
+        DEBUG_LOG("------------------\n");
+    }
+
+    void onConfigReceived(const char *json, uint16_t length, bool isDelta, void *ctx)
+    {
+        DEBUG_LOG("\n" ANSI_GREEN "← Config received: %d bytes, isDelta=%d" ANSI_RESET "\n",
+                  length, isDelta);
+
+        bool ok = false;
+        if (isDelta)
+        {
+            ok = menu_parseDelta(json);
+            DEBUG_LOG("[MENU] Delta parsed: %s\n", ok ? "OK" : "FAIL");
+        }
+        else
+        {
+            ok = menu_parseFullConfig(json);
+            DEBUG_LOG("[MENU] Full config parsed: %s, units=%d, active=%d\n",
+                      ok ? "OK" : "FAIL",
+                      g_menu_cache.getUnitsCount(),
+                      g_menu_cache.active_unit);
+        }
+
+        if (ok)
+        {
+            printMenuCache();
+        }
+    }
 
 } // namespace
 
@@ -298,16 +430,33 @@ void handleClaimStart(const FrameHeader &header)
 
 void setup()
 {
+
+    Serial.begin(115200);
+    while (!Serial)
+    {
+        delay(10);
+    }
+    delay(500);
+
+#ifndef ENABLE_IMPROV_WIFI
+    // Debug вывод только если Improv выключен (иначе ломает протокол)
+    Serial.println(">>> BOOT <<<");
 #ifdef DEBUG_SERIAL
     DEBUG_SERIAL.begin(115200);
     delay(100);
+#endif
+#endif
     DEBUG_LOG("\n\n========================================\n");
     DEBUG_LOG("[BOOT] iDryer Link ESP32-C3 starting...\n");
     DEBUG_LOG("========================================\n");
-#endif
 
     // Инициализируем HAL
+#ifdef ENABLE_IMPROV_WIFI
+    // Improv использует Serial - отключаем HAL логи
+    initArduinoHal(nullptr);
+#else
     initArduinoHal(&DEBUG_SERIAL);
+#endif
 
     // Отключаем JTAG для использования GPIO6/7
     gpio_reset_pin((gpio_num_t)UART_RX_PIN);
@@ -328,6 +477,7 @@ void setup()
     uartBridge.setTelemetryHandler(handleTelemetry);
     uartBridge.setCommandAckHandler(handleCommandAck);
     uartBridge.setConfigAckHandler(handleConfigAck);
+    uartBridge.setConfigPushChunkHandler(handleConfigPushChunk);
     uartBridge.setHeartbeatHandler(handleHeartbeat);
     uartBridge.setErrorHandler(handleError);
     uartBridge.setStatusHandler(handleStatus);
@@ -342,9 +492,10 @@ void setup()
     improvSerial.setDeviceInfo(
         ImprovTypes::ChipFamily::CF_ESP32_C3,
         "iDryer Link",
-        "1.0.0",
+        VERSION_STRING,
         "iDryer",
-        "http://{LOCAL_IPV4}/?name={DEVICE_NAME}");
+        // "http://{LOCAL_IPV4}/?name={DEVICE_NAME}");
+        "");
 
     improvSerial.onImprovConnected(onImprovWiFiConnectCallback);
     improvSerial.onImprovError(onImprovWiFiErrorCallback);
@@ -367,6 +518,10 @@ void setup()
 #endif
 
     device.begin();
+
+    // Регистрируем callback для получения конфига от MCU
+    device.setConfigReceivedCallback(onConfigReceived);
+
     DEBUG_LOG("[INIT] Device started. Ready to receive UART messages...\n");
 
     sendInitialHello();
@@ -383,6 +538,21 @@ void loop()
     device.loop();
 
 #ifdef ENABLE_IMPROV_WIFI
-    improvSerial.handleSerial();
+    // Обрабатываем Improv только пока WiFi не настроен
+    if (!logsEnabled)
+    {
+        improvSerial.handleSerial();
+
+        // Включаем логи после подключения к WiFi
+        if (wifiConfigured && WiFi.status() == WL_CONNECTED)
+        {
+            logsEnabled = true;
+            initArduinoHal(&Serial); // Теперь Serial свободен для логов
+            Serial.println("\n========================================");
+            Serial.println("[BOOT] Logs enabled after WiFi config");
+            Serial.println("========================================");
+            HAL_LOG_INFO("CLOUD", "WiFi connected, logs enabled");
+        }
+    }
 #endif
 }
