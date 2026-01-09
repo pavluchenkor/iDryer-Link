@@ -32,6 +32,10 @@ using namespace idryer::hal;
 // ВАЖНО: При ENABLE_IMPROV_WIFI debug логи отключаются (Serial нужен для Improv протокола)
 #define ENABLE_IMPROV_WIFI
 
+// Раскомментируйте для включения WebSerial Claiming (привязка устройства через веб-морду)
+// ВАЖНО: Работает только совместно с ENABLE_IMPROV_WIFI (после настройки WiFi Serial освобождается)
+#define ENABLE_WEBSERIAL_CLAIMING
+
 #ifdef ENABLE_IMPROV_WIFI
 #include <ImprovWiFiLibrary.h>
 #include <Preferences.h>
@@ -109,7 +113,8 @@ namespace
     // =============================================================================
 
     // HAL Serial для UART
-    ArduinoSerial uartSerial(Serial1);
+    // ESP32-C3: Serial1 = UART_NUM_1
+    ArduinoSerial uartSerial(Serial1, 1);
 
     // Протокольные компоненты
     UartBridge uartBridge;
@@ -305,6 +310,113 @@ namespace
         DEBUG_LOG("[CLAIM] requestClaimProcess() returned: %s\n",
                   result ? "true" : "false");
     }
+
+    // =============================================================================
+    // WEBSERIAL CLAIMING (для веб-морды install.idryer.org)
+    // =============================================================================
+
+#ifdef ENABLE_WEBSERIAL_CLAIMING
+    // Глобальные переменные для WebSerial claiming
+    char currentClaimPin[10] = "";      // Текущий PIN для отображения
+    uint32_t claimPinExpiresIn = 0;     // Время жизни PIN в секундах
+
+    /**
+     * @brief Callback когда получен PIN от backend
+     *
+     * Этот callback вызывается CloudStateMachine когда устройство получает PIN
+     * от сервера после успешного POST /devices/register.
+     * PIN выводится в Serial для веб-морды в формате: CLAIM_PIN:<pin>:<expires>
+     *
+     * @param pin PIN-код для привязки устройства (6-8 цифр)
+     * @param expiresInSeconds Время жизни PIN в секундах (обычно 300 = 5 минут)
+     * @param ctx Пользовательский контекст (не используется)
+     */
+    void onWebClaimPin(const char *pin, uint32_t expiresInSeconds, void *ctx)
+    {
+        // Сохраняем PIN в глобальную переменную
+        strncpy(currentClaimPin, pin, sizeof(currentClaimPin) - 1);
+        currentClaimPin[sizeof(currentClaimPin) - 1] = '\0';
+        claimPinExpiresIn = expiresInSeconds;
+
+        // Выводим PIN в Serial для веб-морды
+        // Формат: CLAIM_PIN:<pin>:<expires_in_seconds>
+        // Пример: CLAIM_PIN:123456:300
+        Serial.print("CLAIM_PIN:");
+        Serial.print(pin);
+        Serial.print(":");
+        Serial.println(expiresInSeconds);
+        Serial.flush(); // Принудительно отправляем данные
+
+        DEBUG_LOG("[WEB_CLAIM] PIN sent to Serial: %s (expires in %ds)\n", pin, expiresInSeconds);
+    }
+
+    /**
+     * @brief Обработчик команды START_CLAIM от веб-морды
+     *
+     * Парсит входящий текст из Serial и ищет команду "START_CLAIM".
+     * Если команда найдена - запускает процесс claiming через device.requestClaimProcess().
+     *
+     * @param line Строка из Serial (уже trimmed)
+     */
+    void handleWebSerialCommand(const String &line)
+    {
+        // Проверяем команду START_CLAIM (case-insensitive)
+        if (line.equalsIgnoreCase("START_CLAIM"))
+        {
+            DEBUG_LOG("[WEB_CLAIM] Received START_CLAIM command from web\n");
+
+            // Запускаем процесс claiming через IdryerDevice
+            bool result = device.requestClaimProcess();
+
+            if (result)
+            {
+                // Claiming успешно запущен
+                Serial.println("CLAIM_STARTED:OK");
+                DEBUG_LOG("[WEB_CLAIM] Claim process started successfully\n");
+            }
+            else
+            {
+                // Ошибка: устройство уже привязано или нет WiFi
+                Serial.println("CLAIM_STARTED:ERROR");
+                DEBUG_LOG("[WEB_CLAIM] Failed to start claim process\n");
+            }
+            Serial.flush();
+        }
+        // Можно добавить обработку других команд здесь
+        // else if (line.equalsIgnoreCase("ДРУГАЯ_КОМАНДА")) { ... }
+    }
+
+    /**
+     * @brief Чтение и обработка команд из Serial (для веб-морды)
+     *
+     * Эта функция вызывается в loop() и проверяет, есть ли данные в Serial.
+     * Если есть - читает строку и передает в handleWebSerialCommand().
+     *
+     * ВАЖНО: Работает только когда logsEnabled = true (после настройки WiFi),
+     *        иначе будет конфликт с Improv протоколом.
+     */
+    void processWebSerialCommands()
+    {
+        // Читаем команды из Serial только после настройки WiFi
+        // (иначе будет конфликт с Improv протоколом)
+        if (!logsEnabled)
+            return;
+
+        // Проверяем, есть ли данные в Serial
+        if (Serial.available() > 0)
+        {
+            // Читаем строку до символа новой строки (\n)
+            String line = Serial.readStringUntil('\n');
+            line.trim(); // Удаляем пробелы и символы переноса
+
+            // Обрабатываем команду, если строка не пустая
+            if (line.length() > 0)
+            {
+                handleWebSerialCommand(line);
+            }
+        }
+    }
+#endif // ENABLE_WEBSERIAL_CLAIMING
 
     // =============================================================================
     // MENU CONFIG CALLBACK
@@ -522,6 +634,13 @@ void setup()
     // Регистрируем callback для получения конфига от MCU
     device.setConfigReceivedCallback(onConfigReceived);
 
+#ifdef ENABLE_WEBSERIAL_CLAIMING
+    // Регистрируем callback для получения PIN (для веб-морды)
+    // Этот callback будет вызван когда CloudStateMachine получит PIN от сервера
+    device.getCloudStateMachine()->setClaimPinCallback(onWebClaimPin, nullptr);
+    DEBUG_LOG("[INIT] WebSerial claiming enabled\n");
+#endif
+
     DEBUG_LOG("[INIT] Device started. Ready to receive UART messages...\n");
 
     sendInitialHello();
@@ -553,6 +672,14 @@ void loop()
             Serial.println("========================================");
             HAL_LOG_INFO("CLOUD", "WiFi connected, logs enabled");
         }
+    }
+    else
+    {
+#ifdef ENABLE_WEBSERIAL_CLAIMING
+        // Обрабатываем команды от веб-морды после настройки WiFi
+        // Serial теперь свободен для кастомных команд
+        processWebSerialCommands();
+#endif
     }
 #endif
 }
