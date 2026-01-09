@@ -45,12 +45,14 @@ using namespace idryer::hal;
 #define ANSI_RESET ""
 #define ANSI_BLUE ""
 #define ANSI_GREEN ""
+#define ANSI_YELLOW ""
 #else
 // Без Improv - включаем debug логи
 #ifdef DEBUG_SERIAL
 #define ANSI_RESET "\033[0m"
 #define ANSI_BLUE "\033[34m"
 #define ANSI_GREEN "\033[32m"
+#define ANSI_YELLOW "\033[33m"
 #define DEBUG_LOG(...) DEBUG_SERIAL.printf(__VA_ARGS__)
 #define DEBUG_JSON(doc)               \
     serializeJson(doc, DEBUG_SERIAL); \
@@ -217,6 +219,19 @@ namespace
     {
         device.handleUartError(payload, remote);
         heartbeatErrors++;
+    }
+
+    void handleLog(const uint8_t *payload, uint8_t length)
+    {
+        // Парсим LogPayload
+        if (length < sizeof(LogPayload))
+        {
+            DEBUG_LOG("Log message too short: %d bytes\n", length);
+            return;
+        }
+
+        const LogPayload *log = reinterpret_cast<const LogPayload *>(payload);
+        device.handleLog(log);
     }
 
     void handleStatus(const StatusPayload &payload, const FrameHeader &header)
@@ -592,6 +607,7 @@ void setup()
     uartBridge.setConfigPushChunkHandler(handleConfigPushChunk);
     uartBridge.setHeartbeatHandler(handleHeartbeat);
     uartBridge.setErrorHandler(handleError);
+    uartBridge.setLogHandler(handleLog);
     uartBridge.setStatusHandler(handleStatus);
     uartBridge.setWeightsHandler(handleWeights);
     uartBridge.setRfidHandler(handleRfid);

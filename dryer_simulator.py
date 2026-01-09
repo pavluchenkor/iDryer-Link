@@ -566,7 +566,9 @@ class DryerSimulator:
 
         vals_count = len(config_data.get('vals', {}))
         rev = config_data.get('rev', 0)
-        self.log(f"→ ConfigPush: {'delta' if is_delta else 'full'} ({total_size} bytes, {vals_count} vals, rev={rev}, transferId={transfer_id})", color='green')
+        # Желтый цвет для delta (ответ на SET), зеленый для full
+        log_color = 'yellow' if is_delta else 'green'
+        self.log(f"→ ConfigPush: {'delta' if is_delta else 'full'} ({total_size} bytes, {vals_count} vals, rev={rev}, transferId={transfer_id})", color=log_color)
 
         # Фрагментация
         offset = 0
@@ -643,8 +645,8 @@ class DryerSimulator:
                 menu_id = cmd_data.get('id')
                 unit = cmd_data.get('unit', 0)
                 val = cmd_data.get('val')
-                self.log(f"← JSON: SET id={menu_id} unit={unit} val={val}", color='blue')
-                self.log(f"→ Sending DELTA response...", color='cyan')
+                self.log(f"← JSON: SET id={menu_id} unit={unit} val={val}", color='yellow')
+                self.log(f"→ Sending DELTA response...", color='yellow')
                 # Отправляем delta обратно как подтверждение
                 if isinstance(val, list):
                     self.send_config_delta(menu_id, val)
