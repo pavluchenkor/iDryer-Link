@@ -525,13 +525,23 @@ class DryerSimulator:
             "1": 0,
         }
 
+        self.log(f"[DEBUG] get_vals_for_units: units_count={units_count}", color='cyan')
+        self.log(f"[DEBUG] self.configs keys: {list(self.configs.keys())}", color='cyan')
+
         # Если есть загруженный JSON конфиг — извлекаем значения из него
         if units_count in self.configs:
             config = self.configs[units_count]
             if "menu" in config:
+                menu_items_count = len(config["menu"])
+                self.log(f"[DEBUG] Loading {menu_items_count} items from config", color='cyan')
                 for item in config["menu"]:
                     if "val" in item and "id" in item:
                         vals[str(item["id"])] = item["val"]
+                self.log(f"[DEBUG] After loading from config: {len(vals)} vals", color='cyan')
+            else:
+                self.log(f"[DEBUG] No 'menu' in config for units={units_count}", color='yellow')
+        else:
+            self.log(f"[DEBUG] No config loaded for units={units_count}", color='yellow')
 
         return {"rev": self.config_rev, "full": True, "vals": vals}
 
