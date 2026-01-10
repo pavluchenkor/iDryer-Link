@@ -323,23 +323,23 @@ class DryerSimulator:
         """Telemetry от RP2040"""
         entries = []
 
-        # TelemetryEntry: unitId(1) + temperatureC10(2) + humidityPct(1) + heaterPowerPct(1) + fanOn(1)
+        # TelemetryEntry: unitId(1) + temperatureC10(2) + humidityPct10(2) + heaterPowerPct(1) + fanOn(1)
         for unit_id in range(self.units_count):
             # Уникальные базовые смещения для каждого юнита (чтобы графики не сливались)
             temp_offset = unit_id * 5.0  # 0°C, 5°C, 10°C, 15°C для юнитов 1-4
             humidity_offset = unit_id * 10.0  # 0%, 10%, 20%, 30% для юнитов 1-4
 
-            entries.append(struct.pack('<BhBBB',
+            entries.append(struct.pack('<BhHBB',
                 unit_id,  # unitId
                 int((self.physics.temperature + temp_offset) * 10),  # temperatureC10
-                int(min(100, self.physics.humidity + humidity_offset)),  # humidityPct (cap at 100%)
+                int(min(1000, (self.physics.humidity + humidity_offset) * 10)),  # humidityPct10 (cap at 100%)
                 self.physics.heater_power,  # heaterPowerPct
                 1 if self.physics.fan_on else 0  # fanOn
             ))
 
         # Дополняем до 4 записей
         while len(entries) < 4:
-            entries.append(struct.pack('<BhBBB', 0, 0, 0, 0, 0))
+            entries.append(struct.pack('<BhHBB', 0, 0, 0, 0, 0))
 
         payload = struct.pack('<B', self.units_count) + b''.join(entries)
         self.sequence = send_frame(self.ser, MSG_TELEMETRY, payload, flags=FLAG_ACK_REQUIRED, sequence=self.sequence)
@@ -663,14 +663,16 @@ class DryerSimulator:
 
             elif cmd == 'invoke':
                 menu_id = cmd_data.get('id')
-                self.log(f"← JSON: INVOKE id={menu_id}", color='blue')
+                self.log(f"← JSON: INVOKE id={menu_id}", color='yellow')
                 # Обработка action по ID
                 if menu_id == 5:  # START drying
+                    self.log(f"→ Executing START drying action", color='yellow')
                     self.start_drying()
                 elif menu_id == 10:  # START storage
+                    self.log(f"→ Executing START storage action", color='yellow')
                     self.start_drying(temp=45, duration=9999)
                 else:
-                    self.log(f"  Action {menu_id} executed (simulated)", color='cyan')
+                    self.log(f"→ Action {menu_id} executed (simulated)", color='yellow')
 
             elif cmd == 'get_config':
                 self.log(f"← JSON: GET_CONFIG", color='blue')
