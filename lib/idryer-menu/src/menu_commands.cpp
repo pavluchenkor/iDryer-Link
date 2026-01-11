@@ -190,6 +190,20 @@ size_t menu_buildFullJson(char* buf, size_t bufSize) {
     // units, lang теперь обычные пункты меню (id=143, 144)
     doc["v"] = g_menu_cache.revision;
 
+    // Обновляем units_count из значения пункта меню ID=143
+    uint8_t unitsCountValue = (uint8_t)g_menu_cache.getInt(143, 0);
+    if (unitsCountValue > 0 && unitsCountValue <= MENU_MAX_UNITS) {
+        g_menu_cache.units_count = unitsCountValue;
+    }
+
+    // Обновляем язык из значения пункта меню ID=145 (LANGUAGE - последний элемент)
+    // Пункт языка всегда последний: g_menu_meta[MENU_META_COUNT-1]
+    if (MENU_META_COUNT > 0) {
+        uint16_t langId = MENU_META_COUNT - 1;  // ID языка (145)
+        uint8_t langValue = (uint8_t)g_menu_cache.getInt(langId, 0);
+        g_menu_cache.lang = langValue;  // Обновляем кешированное значение языка
+    }
+
     // Массив меню
     JsonArray menu = doc.createNestedArray("menu");
     uint8_t lang = g_menu_cache.getLang();
