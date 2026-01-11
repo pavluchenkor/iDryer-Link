@@ -20,29 +20,17 @@ union MenuValue {
     bool     b;
 };
 
-// ID системных настроек в menu_meta
-#define MENU_ID_UNITS_COUNT 143  // Количество юнитов (1-3)
-#define MENU_ID_LANGUAGE    144  // Язык (0=ru, 1=en)
-
 // Кэш значений меню для LINK
 class MenuCache {
 public:
     uint16_t revision = 0;       // Ревизия конфига от MCU
-    uint8_t  active_unit = 0;    // Активный юнит (runtime, не из меню)
+    uint8_t  active_unit = 0;    // Активный юнит (0..units_count-1)
+    uint8_t  units_count = 1;    // Количество юнитов
+    uint8_t  lang = 0;           // Текущий язык (0=ru, 1=en)
 
     // Значения: [menu_id][unit_index]
     // Для global элементов используется только [id][0]
     MenuValue values[MENU_META_COUNT][MENU_MAX_UNITS] = {};
-
-    // Количество юнитов (из menu id=143)
-    uint8_t getUnitsCount() const {
-        return (uint8_t)values[MENU_ID_UNITS_COUNT][0].u8;
-    }
-
-    // Текущий язык (из menu id=144): 0=ru, 1=en
-    uint8_t getLang() const {
-        return (uint8_t)values[MENU_ID_LANGUAGE][0].u8;
-    }
 
     // Получить значение как float
     float getFloat(uint16_t id, uint8_t unit = 255) const {
@@ -91,6 +79,10 @@ public:
     int32_t getInt(uint16_t id, uint8_t unit = 255) const {
         return (int32_t)getFloat(id, unit);
     }
+
+    // Геттеры для lang и units_count
+    uint8_t getLang() const { return lang; }
+    uint8_t getUnitsCount() const { return units_count; }
 };
 
 // Глобальный экземпляр кэша
