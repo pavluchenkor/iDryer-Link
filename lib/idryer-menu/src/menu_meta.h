@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-#define MENU_META_COUNT 145
+#define MENU_META_COUNT 146
 #define MENU_LANG_COUNT 2
 
 typedef enum {
@@ -616,14 +616,18 @@ static const MenuMeta g_menu_meta[MENU_META_COUNT] = {
       META_VT_BOOL, 0.0f, 0.0f, 1.0f, META_SCOPE_PER_UNIT },
     // [142] global_settings
     { 142, { "ОБЩИЕ", "GLOBAL" }, { nullptr, nullptr },
-      META_SUBMENU, 0, 143, 2,
+      META_SUBMENU, 0, 143, 3,
       META_VT_F32, 0.0f, 0.0f, 0.0f, META_SCOPE_PER_UNIT },
     // [143] units_count
     { 143, { "КОЛ-ВО ЮНИТОВ", "UNITS" }, { nullptr, nullptr },
       META_VALUE, 142, -1, 0,
       META_VT_U8, 1.0f, 3.0f, 1.0f, META_SCOPE_GLOBAL },
-    // [144] language
-    { 144, { "ЯЗЫК", "LANGUAGE" }, { nullptr, nullptr },
+    // [144] cmd_ignore_external
+    { 144, { "Игнор команд", "Ignor ext cmd" }, { nullptr, nullptr },
+      META_TOGGLE, 142, -1, 0,
+      META_VT_BOOL, 0.0f, 0.0f, 1.0f, META_SCOPE_GLOBAL },
+    // [145] language
+    { 145, { "ЯЗЫК", "LANGUAGE" }, { nullptr, nullptr },
       META_VALUE, 142, -1, 0,
       META_VT_U8, 0.0f, 1.0f, 1.0f, META_SCOPE_GLOBAL },
 };
