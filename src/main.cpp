@@ -169,7 +169,7 @@ namespace
             JsonObject unit = units.createNestedObject();
             unit["unitId"] = payload.units[i].unitId;
             unit["tempC"] = payload.units[i].temperatureC10 / 10.0;
-            unit["humidity"] = payload.units[i].humidityPct;
+            unit["humidity"] = payload.units[i].humidityPct10 / 10.0f;
         }
         DEBUG_JSON(doc);
 #endif

@@ -4,13 +4,14 @@
 // ВЕРСИЯ ПРОШИВКИ iDryer Link
 // =============================================================================
 
-#define VERSION_MAJOR 1
-#define VERSION_MINOR 0
+#define VERSION_MAJOR 0
+#define VERSION_MINOR 1
 #define VERSION_PATCH 0
 
 // Строка версии "1.0.0"
-#define VERSION_STRING \
-    STRINGIFY(VERSION_MAJOR) "." STRINGIFY(VERSION_MINOR) "." STRINGIFY(VERSION_PATCH)
+#define VERSION_STRING       \
+    STRINGIFY(VERSION_MAJOR) \
+    "." STRINGIFY(VERSION_MINOR) "." STRINGIFY(VERSION_PATCH)
 
 // Число версии 0x010000 (для UART протокола)
 #define VERSION_NUMBER \

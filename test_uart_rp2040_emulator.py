@@ -97,22 +97,22 @@ def send_hello(ser, sequence):
 def send_telemetry(ser, sequence, count=2):
     """Telemetry от RP2040"""
     # TelemetryPayload: count(1) + array[4] TelemetryEntry
-    # TelemetryEntry: unitId(1) + temperatureC10(2) + humidityPct(1) + heaterPowerPct(1) + fanOn(1)
+    # TelemetryEntry: unitId(1) + temperatureC10(2) + humidityPct10(2) + heaterPowerPct(1) + fanOn(1)
 
     entries = []
     for i in range(count):
         # unitId, tempC10, humidity, heaterPower, fanOn
-        entries.append(struct.pack('<BhBBB',
+        entries.append(struct.pack('<BhHBB',
             i,              # unitId
             250 + i*10,     # temperatureC10 (25.0°C)
-            45 + i*5,       # humidityPct (45%)
+            (450 + i*50),   # humidityPct10 (45.0%)
             85 + i*5,       # heaterPowerPct (85%)
             1               # fanOn (true)
         ))
 
     # Дополняем до 4 записей нулями
     while len(entries) < 4:
-        entries.append(struct.pack('<BhBBB', 0, 0, 0, 0, 0))
+        entries.append(struct.pack('<BhHBB', 0, 0, 0, 0, 0))
 
     payload = struct.pack('<B', count) + b''.join(entries)
     return send_frame(ser, MSG_TELEMETRY, payload, flags=FLAG_ACK_REQUIRED, sequence=sequence)

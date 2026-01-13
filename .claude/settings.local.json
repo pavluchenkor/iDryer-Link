@@ -25,7 +25,8 @@
       "WebFetch(domain:esphome.github.io)",
       "Bash(tree:*)",
       "Bash(ssh:*)",
-      "Bash(timeout 10 pio device monitor:*)"
+      "Bash(timeout 10 pio device monitor:*)",
+      "Bash(git -C lib/idryer-protocol log --oneline -3)"
     ]
   }
 }
