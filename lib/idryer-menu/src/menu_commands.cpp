@@ -24,6 +24,39 @@ static void notifyChange(uint16_t id, uint8_t unit) {
     }
 }
 
+// Конвертация поля lang (строка "ru"/"en" или число) в индекс языка
+static uint8_t parseLangVariant(JsonVariant langVal) {
+    if (langVal.is<const char*>()) {
+        const char* s = langVal.as<const char*>();
+        if (!s) return 0;
+        if (strcmp(s, "en") == 0 || strcmp(s, "EN") == 0) return 1;
+        if (strcmp(s, "1") == 0) return 1;
+        return 0; // по умолчанию ru
+    }
+    uint8_t langIdx = langVal.as<uint8_t>();
+    return langIdx ? 1 : 0; // нормализуем к 0/1
+}
+
+static void applyLangToCache(uint8_t lang) {
+    uint8_t norm = lang ? 1 : 0;
+    g_menu_cache.lang = norm;
+    // Синхронизируем с пунктом меню LANGUAGE (последний элемент)
+    const uint16_t langId = MENU_META_COUNT - 1;
+    if (langId < MENU_META_COUNT) {
+        g_menu_cache.setFloat(langId, norm, 0);
+    }
+}
+
+static void applyUnitsToCache(uint8_t units) {
+    uint8_t norm = (units >= 1 && units <= MENU_MAX_UNITS) ? units : g_menu_cache.units_count;
+    g_menu_cache.units_count = norm;
+    // Синхронизируем с пунктом UNITS_COUNT (предпоследний элемент)
+    const uint16_t unitsId = MENU_META_COUNT - 2;
+    if (unitsId < MENU_META_COUNT) {
+        g_menu_cache.setFloat(unitsId, norm, 0);
+    }
+}
+
 // ============================================================================
 // Парсинг JSON от MCU
 // ============================================================================
@@ -67,6 +100,15 @@ static void parseValsObject(JsonObject vals) {
                 notifyChange(id, 0);
             }
         }
+
+        // Поддержка мгновенного обновления языка/юнитов при их приходе в vals
+        const uint16_t langId = MENU_META_COUNT - 1;
+        const uint16_t unitsId = MENU_META_COUNT - 2;
+        if (id == langId) {
+            applyLangToCache((uint8_t)val.as<uint8_t>());
+        } else if (id == unitsId) {
+            applyUnitsToCache((uint8_t)val.as<uint8_t>());
+        }
     }
 }
 
@@ -84,6 +126,22 @@ bool menu_parseFullConfig(const char* json) {
         g_menu_cache.revision = doc["rev"].as<uint16_t>();
     } else if (doc.containsKey("v")) {
         g_menu_cache.revision = doc["v"].as<uint16_t>();
+    }
+
+    // Поддержка старого формата: units/active/lang в корне JSON
+    if (doc.containsKey("units")) {
+        applyUnitsToCache(doc["units"].as<uint8_t>());
+    }
+
+    if (doc.containsKey("active")) {
+        uint8_t active = doc["active"].as<uint8_t>();
+        if (active < MENU_MAX_UNITS) {
+            g_menu_cache.active_unit = active;
+        }
+    }
+
+    if (doc.containsKey("lang")) {
+        applyLangToCache(parseLangVariant(doc["lang"]));
     }
 
     // Парсинг vals объекта: {"rev":8,"vals":{"3":[55,55,60],"143":3,"144":1}}
@@ -107,6 +165,11 @@ bool menu_parseDelta(const char* json) {
     // Обновляем revision
     if (s_configDoc.containsKey("rev")) {
         g_menu_cache.revision = s_configDoc["rev"].as<uint16_t>();
+    }
+
+    // Возможный top-level lang в delta
+    if (s_configDoc.containsKey("lang")) {
+        applyLangToCache(parseLangVariant(s_configDoc["lang"]));
     }
 
     // Парсим vals
@@ -182,8 +245,8 @@ void menu_setChangeCallback(MenuChangeCallback cb) {
 size_t menu_buildFullJson(char* buf, size_t bufSize) {
     if (!buf || bufSize < 256) return 0;
 
-    // Статический буфер (24KB для 145 элементов меню)
-    static StaticJsonDocument<24576> doc;
+    // Статический буфер, рассчитанный от количества пунктов меню
+    static StaticJsonDocument<MENU_JSON_DOC_CAP> doc;
     doc.clear();
 
     // Метаданные — только revision
@@ -273,6 +336,11 @@ size_t menu_buildFullJson(char* buf, size_t bufSize) {
     }
 
     // Сериализация
+    if (doc.overflowed()) {
+        // Если не хватило памяти, логируем и не рискуем публиковать усечённый JSON
+        return 0;
+    }
+
     size_t len = serializeJson(doc, buf, bufSize);
     return len;
 }

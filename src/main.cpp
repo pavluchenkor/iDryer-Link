@@ -20,7 +20,7 @@
 #include <menu_cache.h>
 #include <menu_meta.h>
 
-#include "secrets_config.h"
+#include "secrets.h"
 #include "version.h"
 
 // Используем namespace'ы библиотеки
@@ -30,11 +30,17 @@ using namespace idryer::hal;
 
 // Раскомментируйте для включения Improv Wi-Fi (настройка через браузер)
 // ВАЖНО: При ENABLE_IMPROV_WIFI debug логи отключаются (Serial нужен для Improv протокола)
-#define ENABLE_IMPROV_WIFI
+// #define ENABLE_IMPROV_WIFI
 
 // Раскомментируйте для включения WebSerial Claiming (привязка устройства через веб-морду)
 // ВАЖНО: Работает только совместно с ENABLE_IMPROV_WIFI (после настройки WiFi Serial освобождается)
+#ifdef ENABLE_IMPROV_WIFI
 #define ENABLE_WEBSERIAL_CLAIMING
+#endif
+
+#if defined(ENABLE_WEBSERIAL_CLAIMING) && !defined(ENABLE_IMPROV_WIFI)
+#error "ENABLE_WEBSERIAL_CLAIMING requires ENABLE_IMPROV_WIFI to be enabled"
+#endif
 
 #ifdef ENABLE_IMPROV_WIFI
 #include <ImprovWiFiLibrary.h>
@@ -65,7 +71,6 @@ using namespace idryer::hal;
 
 namespace
 {
-
     // ESP32-C3 UART пины для связи с RP2040
     constexpr int UART_RX_PIN = 6;
     constexpr int UART_TX_PIN = 7;
@@ -75,6 +80,20 @@ namespace
     ImprovWiFi improvSerial(&Serial);
     bool wifiConfigured = false;
     bool logsEnabled = false; // Логи включаются после настройки WiFi
+#else
+    // Без Improv WiFi логи всегда включены
+    bool logsEnabled = true;
+
+// Проверяем наличие WiFi credentials из secrets_config.h
+#ifndef IDRYER_WIFI_SSID
+#error "IDRYER_WIFI_SSID must be defined in secrets_config.h when ENABLE_IMPROV_WIFI is disabled"
+#endif
+#ifndef IDRYER_WIFI_PASSWORD
+#error "IDRYER_WIFI_PASSWORD must be defined in secrets_config.h when ENABLE_IMPROV_WIFI is disabled"
+#endif
+#endif
+
+#ifdef ENABLE_IMPROV_WIFI
 
     void saveWiFiCredentials(const char *ssid, const char *password)
     {
@@ -268,7 +287,7 @@ namespace
         {
             JsonObject w = weights.createNestedObject();
             w["unitId"] = payload.weights[i].unitId;
-            w["weight"] = payload.weights[i].weightGrams;
+            w["weight"] = payload.weights[i].weightGramsC10;
         }
         DEBUG_JSON(doc);
 #endif
@@ -332,8 +351,8 @@ namespace
 
 #ifdef ENABLE_WEBSERIAL_CLAIMING
     // Глобальные переменные для WebSerial claiming
-    char currentClaimPin[10] = "";      // Текущий PIN для отображения
-    uint32_t claimPinExpiresIn = 0;     // Время жизни PIN в секундах
+    char currentClaimPin[10] = "";  // Текущий PIN для отображения
+    uint32_t claimPinExpiresIn = 0; // Время жизни PIN в секундах
 
     /**
      * @brief Callback когда получен PIN от backend
@@ -341,10 +360,11 @@ namespace
      * Этот callback вызывается CloudStateMachine когда устройство получает PIN
      * от сервера после успешного POST /devices/register.
      * PIN выводится в Serial для веб-морды в формате: CLAIM_PIN:<pin>:<expires>
+     * И также отправляется на RP2040 через UART.
      *
      * @param pin PIN-код для привязки устройства (6-8 цифр)
      * @param expiresInSeconds Время жизни PIN в секундах (обычно 300 = 5 минут)
-     * @param ctx Пользовательский контекст (не используется)
+     * @param ctx Пользовательский контекст (указатель на device)
      */
     void onWebClaimPin(const char *pin, uint32_t expiresInSeconds, void *ctx)
     {
@@ -363,6 +383,18 @@ namespace
         Serial.flush(); // Принудительно отправляем данные
 
         DEBUG_LOG("[WEB_CLAIM] PIN sent to Serial: %s (expires in %ds)\n", pin, expiresInSeconds);
+
+        // ВАЖНО: Также отправляем PIN на RP2040 через UART
+        // (иначе RP2040 не получит PIN, т.к. мы перезаписали callback из IdryerDevice)
+        DryerUart::ClaimStatusPayload payload{};
+        payload.status = DryerUart::ClaimingStatus::WaitingClaim;
+        strncpy(payload.pin, pin, sizeof(payload.pin) - 1);
+        payload.pin[sizeof(payload.pin) - 1] = '\0';
+        payload.expiresAt = 0; // TODO: вычислить timestamp
+        payload.remainingSeconds = expiresInSeconds;
+
+        uartBridge.sendClaimStatus(payload);
+        DEBUG_LOG("[WEB_CLAIM] PIN sent to RP2040\n");
     }
 
     /**
@@ -567,14 +599,13 @@ void setup()
 
 #ifndef ENABLE_IMPROV_WIFI
     // Debug вывод только если Improv выключен (иначе ломает протокол)
-    Serial.println(">>> BOOT <<<");
-#ifdef DEBUG_SERIAL
-    DEBUG_SERIAL.begin(115200);
+    Serial.println("\n\n>>> BOOT <<<");
     delay(100);
 #endif
-#endif
-    DEBUG_LOG("\n\n========================================\n");
+    DEBUG_LOG("========================================\n");
     DEBUG_LOG("[BOOT] iDryer Link ESP32-C3 starting...\n");
+    DEBUG_LOG("[BOOT] Firmware Version: %d.%d.%d\n",
+              VERSION_MAJOR, VERSION_MINOR, VERSION_PATCH);
     DEBUG_LOG("========================================\n");
 
     // Инициализируем HAL

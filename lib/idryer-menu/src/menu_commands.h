@@ -22,6 +22,18 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h>
+#include <ArduinoJson.h>
+#include "menu_meta.h"
+#include "menu_cache.h"
+
+// Расчёт вместимости JSON для полного меню
+constexpr size_t MENU_JSON_ITEM_CAP =
+    JSON_OBJECT_SIZE(8) + JSON_ARRAY_SIZE(MENU_MAX_UNITS); // id,t,n,p,u,min,max,step,val[]
+constexpr size_t MENU_JSON_DOC_CAP =
+    JSON_OBJECT_SIZE(2) +                             // v + menu
+    JSON_ARRAY_SIZE(MENU_META_COUNT) +                // оболочка массива
+    MENU_META_COUNT * MENU_JSON_ITEM_CAP;             // сами элементы
+constexpr size_t MENU_FULL_JSON_BUF_SIZE = MENU_JSON_DOC_CAP + 256; // небольшой запас под сериализацию
 
 // ============================================================================
 // Парсинг JSON от MCU → обновление g_menu_cache

@@ -4,8 +4,15 @@
 .vscode/launch.json
 .vscode/ipch
 .pio/
+.pio-home/
 .vscode/
 .DS_Store
-AGENTS.md
+
 src/secrets.h
 submodules.md
+scripts/
+SIM/
+test/
+read_serial.py
+test_uart_rp2040_emulator.py
+docs-service/

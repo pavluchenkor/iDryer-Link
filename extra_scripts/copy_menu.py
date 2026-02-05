@@ -17,6 +17,7 @@ Import("env")
 PROJECT_DIR = Path(env["PROJECT_DIR"])
 SOURCE_DIR = PROJECT_DIR / "config-exmple" / "menu"
 DEST_DIR = PROJECT_DIR / "lib" / "idryer-menu" / "src"
+VERSION_DEST = DEST_DIR / "version.h"
 
 # Файлы для копирования (только нужные для LINK)
 MENU_FILES = [
@@ -59,6 +60,17 @@ def copy_menu_files():
 
         if copied == 0:
             print("  [MENU] Files up to date")
+
+        # Копируем version.h из MCU в lib/idryer-menu/src/
+        # Если SOURCE_DIR это симлинк, берем реальный путь
+        real_source = SOURCE_DIR.resolve() if SOURCE_DIR.is_symlink() else SOURCE_DIR
+        version_src = real_source.parent / "version.h"
+        if version_src.exists():
+            if not VERSION_DEST.exists() or version_src.stat().st_mtime > VERSION_DEST.stat().st_mtime:
+                shutil.copy2(version_src, VERSION_DEST)
+                print(f"  [VERSION] Copied MCU version.h to lib/idryer-menu/src/")
+            else:
+                print("  [VERSION] MCU version.h up to date")
 
         # Создаём library.json если нет
         lib_json = DEST_DIR.parent / "library.json"

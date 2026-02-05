@@ -120,14 +120,14 @@ def send_telemetry(ser, sequence, count=2):
 def send_weights(ser, sequence, count=2):
     """Weights от RP2040"""
     # WeightsPayload: count(1) + array[4] WeightEntry
-    # WeightEntry: sensorId(1) + unitId(1) + weightGrams(2)
+    # WeightEntry: sensorId(1) + unitId(1) + weightGramsC10(2)
 
     entries = []
     for i in range(count):
         entries.append(struct.pack('<BBH',
             i,              # sensorId
             i,              # unitId
-            1000 + i*100    # weightGrams (1000g, 1100g...)
+            1000 + i*100    # weightGramsC10 (1000g, 1100g...)
         ))
 
     while len(entries) < 4:
