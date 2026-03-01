@@ -30,7 +30,7 @@ using namespace idryer::hal;
 
 // Раскомментируйте для включения Improv Wi-Fi (настройка через браузер)
 // ВАЖНО: При ENABLE_IMPROV_WIFI debug логи отключаются (Serial нужен для Improv протокола)
-// #define ENABLE_IMPROV_WIFI
+#define ENABLE_IMPROV_WIFI
 
 // Раскомментируйте для включения WebSerial Claiming (привязка устройства через веб-морду)
 // ВАЖНО: Работает только совместно с ENABLE_IMPROV_WIFI (после настройки WiFi Serial освобождается)
@@ -72,8 +72,8 @@ using namespace idryer::hal;
 namespace
 {
     // ESP32-C3 UART пины для связи с RP2040
-    constexpr int UART_RX_PIN = 6;
-    constexpr int UART_TX_PIN = 7;
+    constexpr int UART_RX_PIN = 6; // 21
+    constexpr int UART_TX_PIN = 7; // 20
 
 #ifdef ENABLE_IMPROV_WIFI
     Preferences preferences;
@@ -417,9 +417,22 @@ namespace
 
             if (result)
             {
-                // Claiming успешно запущен
-                Serial.println("CLAIM_STARTED:OK");
-                DEBUG_LOG("[WEB_CLAIM] Claim process started successfully\n");
+                // Проверяем: если после requestClaimProcess() устройство перешло в Ready —
+                // значит сработал recovery (устройство уже привязано на сервере)
+                auto *csm = device.getCloudStateMachine();
+                if (csm && csm->getState() == cloud::CloudState::Ready)
+                {
+                    // Recovery: устройство уже привязано, сообщаем serialNumber
+                    const char *serial = csm->getIdentity().serialNumber;
+                    Serial.printf("CLAIM_ALREADY:%s\n", serial);
+                    DEBUG_LOG("[WEB_CLAIM] Device already claimed, serial=%s\n", serial);
+                }
+                else
+                {
+                    // Claiming успешно запущен, ждём PIN
+                    Serial.println("CLAIM_STARTED:OK");
+                    DEBUG_LOG("[WEB_CLAIM] Claim process started successfully\n");
+                }
             }
             else
             {
