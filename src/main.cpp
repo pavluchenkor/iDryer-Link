@@ -13,6 +13,7 @@
 #include <Arduino.h>
 #include <idryer_protocol.h>
 #include <platform/arduino/idryer_arduino.h>
+#include "IdryerDevice.h"
 #include <ArduinoJson.h>
 #include <ImprovWiFiLibrary.h>
 #include <Preferences.h>
@@ -36,7 +37,12 @@ using namespace idryer::hal;
 #define ANSI_RESET "\033[0m"
 #define ANSI_GREEN "\033[32m"
 
-#define DEBUG_LOG(...) do { if (logsEnabled) Serial.printf(__VA_ARGS__); } while(0)
+#define DEBUG_LOG(...)                  \
+    do                                  \
+    {                                   \
+        if (logsEnabled)                \
+            Serial.printf(__VA_ARGS__); \
+    } while (0)
 
 namespace
 {
@@ -304,18 +310,14 @@ namespace
 
 } // namespace
 
-// =============================================================================
-// SETUP
-// =============================================================================
-
 void setup()
 {
     Serial.begin(115200);
-    while (!Serial)
-    {
-        delay(10);
-    }
-    delay(500);
+    // while (!Serial)
+    // {
+    //     delay(10);
+    // }
+    // delay(500);
 
     // При старте Improv использует Serial — HAL логи отключены
     initArduinoHal(nullptr);
@@ -358,10 +360,6 @@ void setup()
     // Callback для получения PIN (WebSerial claiming)
     device.setClaimPinCallback(onWebClaimPin);
 }
-
-// =============================================================================
-// LOOP
-// =============================================================================
 
 void loop()
 {
