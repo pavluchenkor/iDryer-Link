@@ -25,7 +25,6 @@
 #include "secrets.h"
 #include "version.h"
 
-// Используем namespace'ы библиотеки
 using namespace DryerUart;
 using namespace idryer;
 using namespace idryer::hal;
@@ -35,13 +34,9 @@ using namespace idryer::hal;
 // =============================================================================
 
 #define ANSI_RESET "\033[0m"
-#define ANSI_BLUE "\033[34m"
 #define ANSI_GREEN "\033[32m"
-#define ANSI_YELLOW "\033[33m"
 
-// Логи работают только когда Serial свободен от Improv протокола
 #define DEBUG_LOG(...) do { if (logsEnabled) Serial.printf(__VA_ARGS__); } while(0)
-#define DEBUG_JSON(doc) do { if (logsEnabled) { serializeJson(doc, Serial); Serial.println(); } } while(0)
 
 namespace
 {
@@ -82,24 +77,12 @@ namespace
         return configured && ssid.length() > 0;
     }
 
-    void clearWiFiCredentials()
-    {
-        preferences.begin("wifi", false);
-        preferences.clear();
-        preferences.end();
-        DEBUG_LOG("[IMPROV] WiFi credentials cleared\n");
-    }
-
-    constexpr uint32_t FIRMWARE_VERSION = VERSION_NUMBER;
-
     // =============================================================================
     // ГЛОБАЛЬНЫЕ ОБЪЕКТЫ
     // =============================================================================
 
     // HAL Serial для UART (ESP32-C3: Serial1 = UART_NUM_1)
     ArduinoSerial uartSerial(Serial1, 1);
-
-    // Протокольные компоненты
     UartBridge uartBridge;
 
     // Платформенные реализации
@@ -123,195 +106,12 @@ namespace
         DEBUG_LOG("[IMPROV] Error: %d\n", err);
     }
 
-    uint32_t lastHeartbeatAt = 0;
-    uint32_t heartbeatErrors = 0;
-
-    // =============================================================================
-    // UART ОБРАБОТЧИКИ
-    // =============================================================================
-
-    void handleHello(const HelloPayload &payload, const FrameHeader &header)
-    {
-        device.handleRpHello(payload, header);
-    }
-
-    void handleTelemetry(const TelemetryPayload &payload, const FrameHeader &header)
-    {
-        DEBUG_LOG("\n" ANSI_BLUE "← Telemetry (seq=%d, count=%d)" ANSI_RESET "\n",
-                  header.sequence, payload.count);
-        if (logsEnabled)
-        {
-            StaticJsonDocument<512> doc;
-            JsonArray units = doc.createNestedArray("units");
-            for (uint8_t i = 0; i < payload.count && i < 4; i++)
-            {
-                JsonObject unit = units.createNestedObject();
-                unit["unitId"] = payload.units[i].unitId;
-                unit["tempC"] = payload.units[i].temperatureC10 / 10.0;
-                unit["humidity"] = payload.units[i].humidityPct10 / 10.0f;
-            }
-            DEBUG_JSON(doc);
-        }
-        device.handleTelemetry(payload, header);
-    }
-
-    void handleCommandAck(const AckPayload &payload, const FrameHeader &header)
-    {
-        device.handleCommandAck(payload, header);
-        if (payload.status != ErrorCode::None)
-        {
-            heartbeatErrors++;
-        }
-    }
-
-    void handleConfigAck(const AckPayload &payload, const FrameHeader &header)
-    {
-        device.handleConfigAck(payload, header);
-        if (payload.status != ErrorCode::None)
-        {
-            heartbeatErrors++;
-        }
-    }
-
-    void handleConfigPushChunk(const ConfigChunkPayload &payload, uint8_t dataLen, const FrameHeader &header)
-    {
-        DEBUG_LOG("\n" ANSI_BLUE "← ConfigPush chunk (transferId=%d, chunk=%d, dataLen=%d)" ANSI_RESET "\n",
-                  payload.header.transferId, payload.header.chunkIndex, dataLen);
-        device.handleConfigPushChunk(payload, dataLen, header);
-    }
-
-    void handleHeartbeat(const HeartbeatPayload &payload, const FrameHeader &header)
-    {
-        DEBUG_LOG("\n" ANSI_BLUE "← Heartbeat (seq=%d)" ANSI_RESET "\n", header.sequence);
-        if (logsEnabled)
-        {
-            StaticJsonDocument<128> doc;
-            doc["uptime"] = payload.uptimeSeconds;
-            doc["rssi"] = payload.wifiRssiDbm;
-            doc["errors"] = payload.errorsSinceBoot;
-            DEBUG_JSON(doc);
-        }
-    }
-
-    void handleError(const ErrorPayload &payload, bool remote)
-    {
-        device.handleUartError(payload, remote);
-        heartbeatErrors++;
-    }
-
-    void handleLog(const uint8_t *payload, uint8_t length)
-    {
-        if (length < sizeof(LogPayload))
-        {
-            DEBUG_LOG("Log message too short: %d bytes\n", length);
-            return;
-        }
-
-        const LogPayload *log = reinterpret_cast<const LogPayload *>(payload);
-        device.handleLog(log);
-    }
-
-    void handleStatus(const StatusPayload &payload, const FrameHeader &header)
-    {
-        DEBUG_LOG("\n" ANSI_BLUE "← Status (seq=%d, count=%d)" ANSI_RESET "\n",
-                  header.sequence, payload.count);
-        if (logsEnabled)
-        {
-            StaticJsonDocument<1024> doc;
-            doc["uptime"] = payload.uptime;
-            JsonArray units = doc.createNestedArray("units");
-            for (uint8_t i = 0; i < payload.count && i < 4; i++)
-            {
-                JsonObject unit = units.createNestedObject();
-                unit["unitId"] = payload.units[i].unitId;
-                unit["mode"] = static_cast<int>(payload.units[i].mode);
-                unit["sessionNum"] = payload.units[i].sessionNum;
-                unit["elapsed"] = payload.units[i].elapsedSeconds;
-                unit["remaining"] = payload.units[i].totalRemainingSeconds;
-                unit["stage"] = payload.units[i].currentStage;
-            }
-            DEBUG_JSON(doc);
-        }
-        device.handleStatus(payload, header);
-    }
-
-    void handleWeights(const WeightsPayload &payload, const FrameHeader &header)
-    {
-        DEBUG_LOG("\n" ANSI_BLUE "← Weights (seq=%d, count=%d)" ANSI_RESET "\n",
-                  header.sequence, payload.count);
-        if (logsEnabled)
-        {
-            StaticJsonDocument<256> doc;
-            JsonArray weights = doc.createNestedArray("weights");
-            for (uint8_t i = 0; i < payload.count && i < 4; i++)
-            {
-                JsonObject w = weights.createNestedObject();
-                w["unitId"] = payload.weights[i].unitId;
-                w["weight"] = payload.weights[i].weightGramsC10;
-            }
-            DEBUG_JSON(doc);
-        }
-        device.handleWeights(payload, header);
-    }
-
-    void handleRfid(const RfidPayload &payload, const FrameHeader &header)
-    {
-        DEBUG_LOG("\n" ANSI_BLUE "← RFID (seq=%d)" ANSI_RESET "\n", header.sequence);
-        if (logsEnabled)
-        {
-            StaticJsonDocument<256> doc;
-            doc["event"] = static_cast<int>(payload.event);
-            doc["readerId"] = payload.readerId;
-            doc["unitId"] = payload.unitId;
-            doc["tag"] = String(payload.tag);
-            DEBUG_JSON(doc);
-        }
-        device.handleRfidEvent(payload, header);
-    }
-
-    void processHeartbeat()
-    {
-        const uint32_t now = millis();
-        if (now - lastHeartbeatAt < HEARTBEAT_INTERVAL_MS)
-        {
-            return;
-        }
-
-        HeartbeatPayload payload{};
-        payload.uptimeSeconds = now / 1000;
-        payload.wifiRssiDbm = 0;
-        payload.errorsSinceBoot = heartbeatErrors;
-        uartBridge.sendHeartbeat(payload);
-
-        lastHeartbeatAt = now;
-    }
-
-    void sendInitialHello()
-    {
-        DEBUG_LOG(ANSI_GREEN "→ Sending Hello from ESP32..." ANSI_RESET "\n");
-        HelloPayload payload{};
-        payload.role = Role::EspBridge;
-        payload.firmwareVersion = FIRMWARE_VERSION;
-        payload.workTimeCounter = millis() / 1000;
-        strncpy(payload.hardwareVersion, "v1.0", sizeof(payload.hardwareVersion) - 1);
-        uartBridge.sendHello(payload, false);
-    }
-
-    void handleClaimStart(const FrameHeader &header)
-    {
-        DEBUG_LOG("\n" ANSI_BLUE "← ClaimStart from RP2040 (seq=%d)" ANSI_RESET "\n",
-                  header.sequence);
-        bool result = device.requestClaimProcess();
-        DEBUG_LOG("[CLAIM] requestClaimProcess() returned: %s\n",
-                  result ? "true" : "false");
-    }
-
     // =============================================================================
     // WEBSERIAL CLAIMING (для веб-морды install.idryer.org)
     // =============================================================================
 
-    char currentClaimPin[10] = "";  // Текущий PIN для отображения
-    uint32_t claimPinExpiresIn = 0; // Время жизни PIN в секундах
+    char currentClaimPin[10] = "";
+    uint32_t claimPinExpiresIn = 0;
 
     /**
      * @brief Callback когда получен PIN от backend
@@ -339,7 +139,7 @@ namespace
         payload.status = DryerUart::ClaimingStatus::WaitingClaim;
         strncpy(payload.pin, pin, sizeof(payload.pin) - 1);
         payload.pin[sizeof(payload.pin) - 1] = '\0';
-        payload.expiresAt = 0; // TODO: вычислить timestamp
+        payload.expiresAt = 0;
         payload.remainingSeconds = expiresInSeconds;
 
         uartBridge.sendClaimStatus(payload);
@@ -383,7 +183,6 @@ namespace
 
     /**
      * @brief Чтение и обработка команд из Serial (для веб-морды)
-     * Работает только когда logsEnabled = true (Serial свободен от Improv)
      */
     void processWebSerialCommands()
     {
@@ -542,20 +341,6 @@ void setup()
     // Инициализируем UART Bridge
     uartBridge.begin(&uartSerial, 115200);
 
-    // Регистрируем обработчики UART сообщений
-    uartBridge.setHelloHandler(handleHello);
-    uartBridge.setTelemetryHandler(handleTelemetry);
-    uartBridge.setCommandAckHandler(handleCommandAck);
-    uartBridge.setConfigAckHandler(handleConfigAck);
-    uartBridge.setConfigPushChunkHandler(handleConfigPushChunk);
-    uartBridge.setHeartbeatHandler(handleHeartbeat);
-    uartBridge.setErrorHandler(handleError);
-    uartBridge.setLogHandler(handleLog);
-    uartBridge.setStatusHandler(handleStatus);
-    uartBridge.setWeightsHandler(handleWeights);
-    uartBridge.setRfidHandler(handleRfid);
-    uartBridge.setClaimStartHandler(handleClaimStart);
-
     // Инициализация Improv Wi-Fi
     improvSerial.setDeviceInfo(
         ImprovTypes::ChipFamily::CF_ESP32_C3,
@@ -575,6 +360,7 @@ void setup()
         wifiConfigured = true;
     }
 
+    // device.begin() регистрирует все UART обработчики и запускает облачную логику
     device.begin();
 
     // Callback для получения конфига от MCU
@@ -582,8 +368,6 @@ void setup()
 
     // Callback для получения PIN (WebSerial claiming)
     device.getCloudStateMachine()->setClaimPinCallback(onWebClaimPin, nullptr);
-
-    sendInitialHello();
 }
 
 // =============================================================================
@@ -593,8 +377,7 @@ void setup()
 void loop()
 {
     uartBridge.loop();
-    processHeartbeat();
-    device.loop();
+    device.loop(); // Включает heartbeat, cloud, публикацию данных
 
     // Improv работает пока WiFi не настроен
     if (!logsEnabled)
@@ -614,7 +397,6 @@ void loop()
     }
     else
     {
-        // Serial свободен — обрабатываем WebSerial команды
         processWebSerialCommands();
     }
 }
