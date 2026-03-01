@@ -117,9 +117,9 @@ namespace
      * @brief Callback когда получен PIN от backend
      *
      * PIN выводится в Serial для веб-морды в формате: CLAIM_PIN:<pin>:<expires>
-     * И также отправляется на RP2040 через UART.
+     * Отправка PIN на RP2040 происходит автоматически внутри библиотеки.
      */
-    void onWebClaimPin(const char *pin, uint32_t expiresInSeconds, void *ctx)
+    void onWebClaimPin(const char *pin, uint32_t expiresInSeconds)
     {
         strncpy(currentClaimPin, pin, sizeof(currentClaimPin) - 1);
         currentClaimPin[sizeof(currentClaimPin) - 1] = '\0';
@@ -133,17 +133,6 @@ namespace
         Serial.flush();
 
         DEBUG_LOG("[WEB_CLAIM] PIN sent to Serial: %s (expires in %ds)\n", pin, expiresInSeconds);
-
-        // Также отправляем PIN на RP2040 через UART
-        DryerUart::ClaimStatusPayload payload{};
-        payload.status = DryerUart::ClaimingStatus::WaitingClaim;
-        strncpy(payload.pin, pin, sizeof(payload.pin) - 1);
-        payload.pin[sizeof(payload.pin) - 1] = '\0';
-        payload.expiresAt = 0;
-        payload.remainingSeconds = expiresInSeconds;
-
-        uartBridge.sendClaimStatus(payload);
-        DEBUG_LOG("[WEB_CLAIM] PIN sent to RP2040\n");
     }
 
     /**
@@ -287,7 +276,7 @@ namespace
         DEBUG_LOG("------------------\n");
     }
 
-    void onConfigReceived(const char *json, uint16_t length, bool isDelta, void *ctx)
+    void onConfigReceived(const char *json, uint16_t length, bool isDelta)
     {
         DEBUG_LOG("\n" ANSI_GREEN "← Config received: %d bytes, isDelta=%d" ANSI_RESET "\n",
                   length, isDelta);
@@ -367,7 +356,7 @@ void setup()
     device.setConfigReceivedCallback(onConfigReceived);
 
     // Callback для получения PIN (WebSerial claiming)
-    device.getCloudStateMachine()->setClaimPinCallback(onWebClaimPin, nullptr);
+    device.setClaimPinCallback(onWebClaimPin);
 }
 
 // =============================================================================
@@ -376,8 +365,7 @@ void setup()
 
 void loop()
 {
-    uartBridge.loop();
-    device.loop(); // Включает heartbeat, cloud, публикацию данных
+    device.loop(); // UART + heartbeat + cloud + публикация данных
 
     // Improv работает пока WiFi не настроен
     if (!logsEnabled)
