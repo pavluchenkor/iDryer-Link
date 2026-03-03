@@ -461,8 +461,8 @@ void WsServer::sendConfig(const char* json, uint16_t length, bool isDelta)
 {
     if (!isClientConnected()) return;
 
-    // Отправляем raw JSON как data внутри {"type":"config","data":{...}}
-    // Для простоты — парсим и пересылаем
+    // Ограничение текущей реализации: JSON должен влезать в ~2 KB документ.
+    // Если полный config больше, deserializeJson вернёт ошибку и отправка не состоится.
     DynamicJsonDocument doc(2048);
     DeserializationError err = deserializeJson(doc, json, length);
     if (err) {

@@ -31,9 +31,9 @@ namespace idryer
     // =============================================================================
 
     /**
-     * @brief Преобразует IP строку в uint32_t (network byte order)
-     * @param ipStr IP строка формата "192.168.1.100"
-     * @return IP адрес в network byte order, 0 если ошибка парсинга
+     * @brief Преобразует "A.B.C.D" в 32-битное поле для `HelloAckPayload::ipAddress`.
+     * @note Возвращаемый формат — A | (B<<8) | (C<<16) | (D<<24).
+     * Он должен совпадать с распаковкой на стороне RP2040.
      */
     static uint32_t parseIpAddress(const char *ipStr)
     {
@@ -76,7 +76,7 @@ namespace idryer
             return 0;
         }
 
-        // Network byte order (little endian на ESP32, но IP всегда big endian)
+        // Порядок байт должен оставаться совместимым с текущим UART контрактом.
         return (uint32_t)octets[0] |
                ((uint32_t)octets[1] << 8) |
                ((uint32_t)octets[2] << 16) |
@@ -895,6 +895,8 @@ namespace idryer
 
         if (strptime(cleanTimestamp, "%Y-%m-%dT%H:%M:%SZ", &tm) != nullptr)
         {
+            // Важно: mktime интерпретирует `tm` как локальное время.
+            // Здесь ожидается UTC-вход (`...Z`), поэтому TZ окружения влияет на результат.
             time_t t = mktime(&tm);
 
             struct timeval tv = {0};

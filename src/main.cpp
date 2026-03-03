@@ -14,6 +14,7 @@
 #include <idryer_protocol.h>
 #include <platform/arduino/idryer_arduino.h>
 #include "IdryerDevice.h"
+#include "WsServer.h"
 #include <ArduinoJson.h>
 #include <ImprovWiFiLibrary.h>
 #include <Preferences.h>
@@ -98,6 +99,9 @@ namespace
 
     // Главный фасад устройства
     IdryerDevice device(&wifiManager, &httpClient, &credStore, &uartBridge, IDRYER_API_BASE);
+
+    // WebSocket сервер для локального доступа
+    WsServer wsServer(&uartBridge);
 
     void onImprovWiFiConnectCallback(const char *ssid, const char *password)
     {
@@ -354,6 +358,14 @@ void setup()
     // device.begin() регистрирует все UART обработчики и запускает облачную логику
     device.begin();
 
+    // Подключаем WS сервер к фасаду (WS активируется позже по UART команде WsEnable)
+    device.setWsServer(&wsServer);
+
+    // WS команды идут через тот же CommandHandler что и MQTT
+    wsServer.setCommandCallback([](const char* command, JsonObjectConst data) {
+        device.handleExternalCommand(command, data);
+    });
+
     // Callback для получения конфига от MCU
     device.setConfigReceivedCallback(onConfigReceived);
 
@@ -376,6 +388,7 @@ void loop()
             logsEnabled = true;
             initArduinoHal(&Serial);
             Serial.println("\n========================================");
+            Serial.printf("[BOOT] FW=%s  UART_PROTO=%d\n", VERSION_STR, DryerUart::PROTOCOL_VERSION);
             Serial.println("[BOOT] Logs enabled after WiFi config");
             Serial.println("========================================");
             HAL_LOG_INFO("CLOUD", "WiFi connected, logs enabled");

@@ -1,46 +1,6 @@
 /**
  * @file IdryerDevice.h
- * @brief Фасад устройства iDryer Link (ESP32-C3 + RP2040)
- *
- * Это APPLICATION CODE, специфичный для iDryer Link.
- * Не является частью библиотеки idryer-protocol.
- *
- * IdryerDevice объединяет компоненты библиотеки:
- * - CloudStateMachine - управление WiFi/Provision/MQTT подключением
- * - TelemetryPublisher - публикация телеметрии в MQTT
- * - CommandHandler - обработка MQTT команд
- * - HttpApi - HTTP API к backend
- * - UartBridge - UART протокол с RP2040
- *
- * Пример использования:
- * @code
- * #include <idryer_protocol.h>
- * #include <platform/arduino/idryer_arduino.h>
- * #include "IdryerDevice.h"
- *
- * using namespace idryer;
- *
- * ArduinoWifiManager wifi;
- * ArduinoHttpClient http;
- * ArduinoCredentialStore store;
- * hal::ArduinoSerial uartSerial(&Serial2);
- * DryerUart::UartBridge uart;
- *
- * IdryerDevice device(&wifi, &http, &store, &uart);
- *
- * void setup() {
- *     Serial.begin(115200);
- *     hal::initArduinoHal(&Serial);
- *
- *     wifi.begin(WIFI_SSID, WIFI_PASSWORD);
- *     uart.begin(&uartSerial, 115200);
- *     device.begin();
- * }
- *
- * void loop() {
- *     device.loop();  // UART + cloud + heartbeat
- * }
- * @endcode
+ * @brief Фасад iDryer Link (application layer, не часть idryer-protocol).
  */
 
 #pragma once
@@ -58,72 +18,38 @@
 #include <device/interfaces/IHttpClient.h>
 #include <device/interfaces/ICredentialStore.h>
 
+class WsServer;
+
 namespace idryer {
 
-/// Callback при получении конфига от MCU (json, length, isDelta)
+/// (json, length, isDelta)
 using ConfigReceivedCallback = std::function<void(const char* json, uint16_t length, bool isDelta)>;
 
-/// Callback при таймауте связи с MCU (MCU не отвечает на Hello Request)
+/// Вызывается после таймаута hello/retry.
 using McuTimeoutCallback = std::function<void()>;
 
-/// Callback при получении PIN для привязки устройства (pin, expiresInSeconds)
+/// (pin, expiresInSeconds)
 using ClaimPinCallback = std::function<void(const char* pin, uint32_t expiresInSeconds)>;
 
-/**
- * @brief Главный класс устройства iDryer Link
- *
- * Объединяет все компоненты в единую систему:
- * 1. WiFi подключение (через IWifiManager)
- * 2. Регистрация устройства (provision → register → claim)
- * 3. MQTT коммуникация
- * 4. UART протокол с RP2040
- */
+/// Координирует UART, cloud state machine, MQTT и WS.
 class IdryerDevice {
 public:
-    /**
-     * @brief Конструктор
-     * @param wifi WiFi менеджер
-     * @param http HTTP клиент
-     * @param store хранилище credentials
-     * @param uart UART мост к RP2040
-     * @param apiBaseUrl базовый URL API (по умолчанию из config)
-     */
     IdryerDevice(IWifiManager* wifi,
                  IHttpClient* http,
                  ICredentialStore* store,
                  DryerUart::UartBridge* uart,
                  const char* apiBaseUrl = nullptr);
 
-    /**
-     * @brief Инициализация устройства
-     *
-     * Загружает credentials, настраивает callbacks.
-     * Вызвать один раз в setup().
-     */
+    /// Инициализация зависимостей и регистрация callbacks.
     void begin();
 
-    /**
-     * @brief Главный цикл обработки
-     *
-     * ОБЯЗАТЕЛЬНО вызывать в loop()!
-     * Обрабатывает UART, WiFi, MQTT, heartbeat, публикацию телеметрии.
-     * Отдельный вызов uart.loop() НЕ нужен.
-     */
+    /// Главный цикл фасада. Отдельно `uart.loop()` вызывать не нужно.
     void loop();
 
-    /**
-     * @brief Запустить процесс привязки устройства (claiming)
-     * @return true если процесс запущен
-     *
-     * Вызывается по запросу пользователя (кнопка на экране RP2040).
-     * Генерирует PIN и начинает polling статуса.
-     */
+    /// Возвращает `false`, если claiming невозможен в текущем состоянии.
     bool requestClaimProcess();
 
-    // =========================================================================
-    // UART CALLBACKS
-    // Вызываются из UartBridge при получении данных от RP2040
-    // =========================================================================
+    // UART callbacks
 
     void handleRpHello(const DryerUart::HelloPayload& payload,
                        const DryerUart::FrameHeader& header);
@@ -150,136 +76,83 @@ public:
 
     void handleLog(const DryerUart::LogPayload* log);
 
-    /**
-     * @brief Обработка фрагментированного конфига от RP2040
-     * @param payload Фрагмент конфига
-     * @param dataLen Длина данных (без заголовка)
-     * @param header Заголовок фрейма (flags для определения LAST_FRAGMENT)
-     */
+    /// `dataLen` — длина JSON-данных в текущем фрагменте, без chunk header.
     void handleConfigPushChunk(const DryerUart::ConfigChunkPayload& payload,
                                uint8_t dataLen,
                                const DryerUart::FrameHeader& header);
 
-    /**
-     * @brief Публикация готового JSON конфига в MQTT
-     * @param json JSON строка
-     * @param length Длина JSON
-     * @param isDelta true для delta топика, false для полного конфига
-     * @return true если опубликовано успешно
-     */
+    /// `isDelta=true` -> `config/delta`, иначе `config`.
     bool publishConfig(const char* json, uint16_t length, bool isDelta = false);
 
-    /**
-     * @brief Установить callback для получения конфига от MCU
-     *
-     * Вызывается когда конфиг полностью получен (после сборки фрагментов).
-     * Callback получает raw JSON для парсинга через menu_parseFullConfig/menu_parseDelta.
-     */
     void setConfigReceivedCallback(ConfigReceivedCallback cb) {
         configCallback_ = cb;
     }
 
-    /**
-     * @brief Установить callback для таймаута связи с MCU
-     *
-     * Вызывается после HELLO_REQUEST_MAX_ATTEMPTS неудачных попыток получить Hello от MCU.
-     */
     void setMcuTimeoutCallback(McuTimeoutCallback cb) {
         mcuTimeoutCallback_ = cb;
     }
 
-    /**
-     * @brief Установить callback для получения PIN при привязке устройства
-     *
-     * Вызывается когда backend выдаёт PIN для claiming.
-     * Этот callback ДОПОЛНЯЕТ внутренний (который отправляет PIN на RP2040).
-     */
+    /// Дополняет внутренний callback, который отправляет PIN на RP2040.
     void setClaimPinCallback(ClaimPinCallback cb) {
         userClaimPinCallback_ = cb;
     }
 
-    /**
-     * @brief Проверка получен ли Hello от MCU
-     * @return true если MCU на связи
-     */
+    void setWsServer(WsServer* ws) { wsServer_ = ws; }
+
+    /// Внешняя команда идёт в тот же `CommandHandler`, что и MQTT.
+    void handleExternalCommand(const char* command, JsonObjectConst data);
+
     bool isMcuConnected() const { return helloReceived_; }
 
-    // =========================================================================
-    // ДОСТУП К СОСТОЯНИЮ
-    // =========================================================================
-
-    /**
-     * @brief Проверка онлайн статуса
-     * @return true если MQTT подключен
-     */
+    // Чтение состояния (без модификации)
     bool isOnline() const { return cloud_.isOnline(); }
 
-    /**
-     * @brief Текущее состояние облака
-     */
     cloud::CloudState getCloudState() const { return cloud_.getState(); }
 
-    /**
-     * @brief Доступ к identity (read-only)
-     */
     const DeviceIdentity& getIdentity() const { return cloud_.getIdentity(); }
 
-    /**
-     * @brief Доступ к CloudStateMachine для регистрации дополнительных callbacks
-     * @return Указатель на CloudStateMachine
-     */
+    /// Для регистрации внешних callbacks и диагностики состояния.
     cloud::CloudStateMachine* getCloudStateMachine() { return &cloud_; }
 
 private:
-    // =========================================================================
-    // КОМПОНЕНТЫ
-    // =========================================================================
-
     IWifiManager* wifi_;
     IHttpClient* http_;
     ICredentialStore* store_;
     DryerUart::UartBridge* uart_;
 
-    // Cloud компоненты
+    // Компоненты облака
     cloud::HttpApi api_;
     MqttClient mqtt_;
     cloud::CloudStateMachine cloud_;
     cloud::TelemetryPublisher publisher_;
     cloud::CommandHandler cmdHandler_;
 
-    // =========================================================================
-    // СОСТОЯНИЕ
-    // =========================================================================
+    bool helloReceived_ = false;   // Публикации разрешаются после первого Hello.
+    uint8_t unitsCount_ = 1;       // Актуализируется из Hello payload.
 
-    bool helloReceived_ = false;  // Блокирует публикации до Hello от RP2040
-    uint8_t unitsCount_ = 1;       // Количество камер (из Hello)
-
-    // Кэш RFID событий (по одному на ридер, до 4 ридеров)
-    // Нужен чтобы сервер узнал о метках если MQTT был оффлайн
+    // Офлайн-кэш: последнее RFID событие на ридер.
     static constexpr uint8_t MAX_RFID_READERS = 4;
     DryerUart::RfidPayload latestRfid_[MAX_RFID_READERS]{};
     bool rfidDirty_[MAX_RFID_READERS] = {false};
 
-    // Config receiver для сборки фрагментов от RP2040
+    // Сборка фрагментов ConfigPush от MCU.
     DryerUart::ConfigReceiver configReceiver_;
 
-    // Callbacks
     ConfigReceivedCallback configCallback_;
     McuTimeoutCallback mcuTimeoutCallback_;
     ClaimPinCallback userClaimPinCallback_;
 
-    // Hello Request retry state
-    uint32_t lastHelloRequestMs_ = 0;   // Время последней отправки Hello Request
-    uint8_t helloRequestAttempts_ = 0;  // Счётчик попыток
-    bool mcuTimeoutNotified_ = false;   // Callback уже вызван
+    // Состояние retry для Hello Request.
+    uint32_t lastHelloRequestMs_ = 0;
+    uint8_t helloRequestAttempts_ = 0;
+    bool mcuTimeoutNotified_ = false;
 
-    // Heartbeat state
+    // Локальный WebSocket мост.
+    WsServer* wsServer_ = nullptr;
+
+    // Состояние heartbeat.
     uint32_t lastHeartbeatAt_ = 0;
     uint32_t heartbeatErrors_ = 0;
-
-    // =========================================================================
-    // ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ
-    // =========================================================================
 
     void registerUartHandlers();
     void processHeartbeat();
@@ -288,21 +161,16 @@ private:
     void publishDeviceInfo(const DryerUart::HelloPayload& payload);
     void syncTimeFromBackend(const char* timestamp);
 
-    // Callback для MQTT команд
     void handleMqttCommand(const char* command, JsonObjectConst data);
 
-    // Callback для смены состояния облака
     static void onCloudStateChange(cloud::CloudState oldState,
                                    cloud::CloudState newState,
                                    void* ctx);
 
-    // Callback для PIN (claiming)
     static void onClaimPin(const char* pin, uint32_t expiresInSeconds, void* ctx);
 
-    // Callback для завершения claiming
     static void onClaimComplete(const char* deviceId, void* ctx);
 
-    // Callback когда устройство не привязано (после provision)
     static void onUnclaimed(void* ctx);
 };
 
