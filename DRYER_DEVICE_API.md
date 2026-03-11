@@ -1,197 +1,233 @@
-# API микроконтроллера iDryer
+# iDryer Link Device API (текущая реализация)
 
-Документ описывает, как «железный» контроллер сушилки общается с backend-порталом iDryer через REST и WebSocket. Все примеры даны для production (`https://portal.idryer.org`) и локальной разработки (`http://localhost:3000`). Формат обмена — JSON в кодировке UTF-8.
+Документ описывает **фактический** сетевой и протокольный поток для прошивки Link (ESP32-C3) в этом репозитории.
 
-## 1. Архитектура обмена
-- **REST (HTTP/HTTPS)** — используется только для первичной регистрации устройства и проверки привязки. Базовый URL: `https://portal.idryer.org/api` (в деве `http://localhost:3000`).
-- **WebSocket (Socket.IO v4)** — основной канал телеметрии/команд. Точка подключения: `wss://portal.idryer.org/socket.io` (или `ws://localhost:3000/socket.io`). Используется transport `websocket`, авторизация токеном устройства.
-- **Идентификаторы**: каждое устройство хранит постоянный `token` (генерируется на производстве) и получает `deviceId` (UUID из БД) после привязки.
+Источник правды: текущий код `src/` и `lib/idryer-protocol/src/`.
 
-## 2. Процесс регистрации и привязки устройства
-1. **Запрос PIN на устройстве**  
-   `POST /devices/register` (публично, без JWT). Тело (`RegisterDeviceDto`, `backend/src/devices/dto/register-device.dto.ts`):
-   ```json
-   {
-     "token": "unique-hardware-token",
-     "serialNumber": "IDRYER-PRO-0001"
-   }
-   ```
-   Ответ (`devices.service.registerUnclaimedDevice`, `backend/src/devices/devices.service.ts:229`):
-   ```json
-   {
-     "pin": "12345678",
-     "expiresAt": "2025-01-18T12:34:56.000Z",
-     "remainingSeconds": 599
-   }
-   ```
-   PIN состоит ровно из 8 цифр и действует 10 минут. Повторный запрос до истечения продлевает `remainingSeconds`.
+## 1. Роли компонентов
 
-2. **Пользователь вводит PIN**  
-   Через портал вызывается `POST /devices/claim` c PIN и читаемым именем (`ClaimDeviceDto`). Устройство этот этап не вызывает, но должно отображать PIN и отслеживать статус.
+- **ESP32 Link**: сетевой мост между MCU (RP2040) и iDryer Portal.
+- **RP2040 MCU**: контроллер сушилки, UI и локальная логика режимов.
+- **Portal Backend**: REST для provision/claim, MQTT брокер для realtime команд и телеметрии.
+- **Portal Frontend**: UI для пользователя (ввод PIN, управление устройством).
 
-3. **Периодический опрос статуса**  
-   `GET /devices/check-claim/:token` (публично). Пока устройство не привязано — `404` c `{"claimed": false}` (`devices.controller.ts:99`). После привязки ответ:
-   ```json
-   {
-     "claimed": true,
-     "device": {
-       "id": "2a1d...c3",
-       "name": "iDryer Pro в мастерской",
-       "serialNumber": "IDRYER-PRO-0001",
-       "token": "unique-hardware-token",
-       "createdAt": "2025-01-18T12:35:42.000Z"
-     }
-   }
-   ```
-   Полученные `device.id` и `token` нужно сохранить во flash/EEPROM; именно они используются при WebSocket-подключении.
+## 2. Протоколы в текущей прошивке
 
-## 3. WebSocket API
-Все сообщения идут через Socket.IO. Клиент инициирует соединение и сразу отправляет событие `device:connect`.
+- **UART (RP2040 ↔ ESP32)**: телеметрия, команды, claim-кадры `0x70..0x72`.
+- **REST (ESP32 → Portal API)**: `/devices/provision`, `/devices/register`, `/devices/check-claim/{token}`.
+- **MQTT (ESP32 ↔ Broker)**: основной рабочий канал после claim.
+- **USB Serial (Web Installer ↔ ESP32)**: команда `START_CLAIM`, события `CLAIM_*`.
 
-### 3.1 Подключение (`device:connect`)
-- **Направление:** устройство → backend.  
-- **Payload** (`DeviceConnectDto`, `backend/src/gateway/dto/device-connect.dto.ts`):
-  ```json
-  {
-    "deviceId": "2a1d...c3",
-    "token": "unique-hardware-token"
-  }
-  ```
-- **Ответ:** `{ "status": "connected", "deviceId": "..." }`.  
-- При неверном токене backend шлёт `error` с сообщением `Invalid device credentials` (`events.gateway.ts:95-159`).  
-- Если устройство уже онлайн, старое соединение получает `device:duplicate` и разрывается (`events.gateway.ts:120-138`).
+Важно: в этой прошивке рабочий realtime-канал устройства с backend — **MQTT**, не Socket.IO/WebSocket.
 
-### 3.2 Телеметрия (`telemetry:data`)
-- **Направление:** устройство → backend.  
-- **Payload:** `{ "deviceId": "...", "data": TelemetryData }`, где `TelemetryData` строго соответствует `backend/src/gateway/dto/telemetry-data.dto.ts`. Обязательные поля — `temperature` и `humidity`.
+## 3. Конфигурация окружений
 
-| Поле | Тип | Обяз. | Диапазон/формат | Назначение |
-| --- | --- | --- | --- | --- |
-| `temperature` | number | ✓ | -50…150 °C | Текущая температура внутри сушилки |
-| `humidity` | number | ✓ | 0…100 % | Влажность |
-| `heaterPower` | number | | 0…100 % | Мощность нагревателя (для UI) |
-| `fanStatus` | boolean | | `true` если вентилятор включен |
-| `filamentWeight` | number | | 0…10000 г | Текущий вес катушки; сохраняется как масса спула (`telemetry.service.ts:55-90`) |
-| `rfidTag` | string | | Любая строка | UID метки; backend нормализует и может автоматически подобрать катушку (`telemetry.service.ts:91-163`) |
-| `deviceStatus` | string | | `IDLE` / `DRYING` / `STORAGE` | Состояние контроллера; управляет автосессиями |
-| `targetTemperature` | number | | 30…100 °C | Цель, которую выбрал пользователь на устройстве |
-| `targetDuration` | number | | 1…1440 мин | Целевая длительность |
-| `elapsedTime` | number | | 0…86400 сек | Сколько уже сушим (для UI таймера) |
+### Production
 
-**Важно про `deviceStatus`:** перечисление `DeviceStatus` определено в `backend/prisma/schema.prisma:587`. Backend автоматически создаёт/закрывает сессии:
-- Переход в `DRYING` или `STORAGE` при отсутствии активной сессии → `sessionsService.create(...)` с температурой/длительностью из телеметрии (`events.gateway.ts:210-239`).  
-- Переход в `IDLE` при наличии активной сессии завершает её, фиксируя `endTime` (`events.gateway.ts:241-255`).  
-Поэтому устройство должно отправлять актуальный статус при каждом значимом изменении.
+- API base: `https://portal.idryer.org/api`
+- MQTT broker: `mqtt.idryer.org:8883`
+- MQTT TLS: включен
 
-**Ответ сервера:** `{ "status": "saved" }` или `error` (например, если устройство не найдено). После сохранения backend рассылает обновления всем фронтам (`telemetry:update`, `telemetry:new`).
+### Staging
 
-### 3.3 Команды от портала (`command:execute`)
-- **Направление:** backend → устройство (проксируется из `device:command`, `events.gateway.ts:299-333`).
-- **Payload:** объект `CommandDto` (`backend/src/gateway/dto/command.dto.ts`):
+- API base: `https://staging.idryer.org/api`
+- MQTT broker: `82.146.63.133:1884`
+- MQTT TLS: выключен
 
-| `type` | Описание | Payload (если есть) |
-| --- | --- | --- |
-| `START` | Запуск сушки с параметрами текущей сессии | `{ "temperature": number, "duration": number }` |
-| `STOP` | Мгновенная остановка, перевод в `IDLE` | – |
-| `PAUSE` / `RESUME` | Управление паузой | – |
-| `STORAGE` | Перевод в режим хранения | `{ "temperature": number }` (опционально) |
-| `SET_TEMPERATURE` | Изменение целевой температуры | `{ "temperature": number }` |
-| `SET_DURATION` | Изменение длительности | `{ "duration": number }` |
-| `SET_FAN_SPEED` | Регулировка вентилятора | `{ "percent": number }` |
+## 4. Идентификаторы устройства
 
-Устройство должно:
-1. Выполнить команду.
-2. Подтвердить результат сменой `deviceStatus`/`target*` в следующем сообщении `telemetry:data`.
-3. (Опционально) послать собственное событие-ACK, если требуется (протокол не заставляет, но допустимо отправить `telemetry:data` с флагом успеха).
+- `serialNumber`: генерируется на ESP32 из MAC как `DEVICE_<MAC12HEX>`.
+  - Пример: `DEVICE_A1B2C3D4E5F6`
+- `token`: выдается backend в `POST /devices/provision` (`deviceToken`).
+- `deviceId`: появляется только после успешного claim (или recovery-ответа backend).
 
-Если устройство оффлайн, фронтенд получит `error: "Device not connected"`; девайсу ничего отправлено не будет.
+Хранение на ESP32 (NVS):
 
-## 4. Поток событий «из коробки»
-1. **Boot**: устройство загружает `token`. Если `deviceId` не известен, идёт в секцию регистрации.  
-2. **Ожидание привязки**: цикл `POST /devices/register` → отобразить PIN → каждые 3–5 сек `GET /devices/check-claim/:token` до ответа `claimed:true`.  
-3. **Рабочий режим**:
-   - Подключиться к Socket.IO и отправить `device:connect`.
-   - Раз в 1–5 секунд публиковать `telemetry:data` (минимум при каждом изменении статуса или RFID).
-   - Реагировать на входящие `command:execute`.
-   - При завершении сушки обязательно установить `deviceStatus = "IDLE"` (иначе сессия не закроется).
+- key `serial`
+- key `token`
+- key `deviceId`
 
-## 5. Обработка ошибок и отладка
-- **HTTP**:  
-  - `400 Bad Request` — токен уже привязан или PIN просрочен (`devices.service.ts:237-335`).  
-  - `404 Not Found` — PIN не найден или устройство ещё не привязано (`devices.controller.ts:99-114`).  
-  - `409 Conflict` — не используется, но коллизии PIN предотвращаются генератором (`utils/pin.utils.ts`).
-- **WebSocket**:  
-  - `error` событие с `message` (например, `Connection failed`, `Failed to save telemetry`).  
-  - `device:duplicate` — означает, что новое соединение вытеснило старое; устройство может переподключиться.
-- **Диагностика RFID/веса**: backend логирует автозамену катушек и ошибки создания «unclaimed» филаментов (`telemetry.service.ts:91-163`). Это помогает понять, почему меняется `currentFilament`.
+## 5. Cloud state machine
 
-## 6. Рекомендации для прошивки
-1. **Повторное соединение**: по любому сетевому сбою перезапускайте Socket.IO и заново шлите `device:connect`. Backend автоматически пометит устройство offline/online (`events.gateway.ts:71-158`).
-2. **Защита PIN**: не храните PIN в постоянной памяти — он одноразовый.
-3. **Частота телеметрии**: чтобы не перегружать канал, придерживайтесь 1–2 сообщений в секунду во время активной сушки; при IDLE можно снизить до 1 сообщения в 15–30 секунд, но обязательно отправляйте обновление при каждом изменении RFID, веса или статуса.
-4. **Валидация данных**: backend режет любые поля, которых нет в DTO (глобальный `ValidationPipe` в `backend/src/main.ts:39-64`). Следите, чтобы типы и диапазоны совпадали со схемой.
-5. **Сохранение параметров**: храните `deviceId`, `token`, последнюю известную `targetTemperature/Duration`, чтобы после перезагрузки вернуться в корректный режим и продолжить отчёт (`elapsedTime` можно восстановить из RTC).
+Состояния:
 
-## 4. UART протокол (RP2040 ↔ ESP32)
+1. `WifiConnecting`
+2. `Provisioning`
+3. `AwaitingClaim` (только когда claim запущен)
+4. `Ready`
+5. `MqttConnecting`
+6. `Online`
 
-ESP32 выступает сетевым мостом и связывается с RP2040 по UART (115200 бод, 8N1). Канал используется для передачи телеметрии, команд и конфигурации.
+Ключевая логика:
 
-**📚 Полная спецификация UART протокола:**
+- Если есть `token`, но нет `deviceId`, устройство **не** идет в MQTT автоматически.
+- Для старта claim нужен явный триггер (`START_CLAIM` по USB или `ClaimStart` по UART).
+- В MQTT устройство переходит только при наличии **и `token`, и `deviceId`**.
 
-Детальное описание протокола (формат кадров, структуры данных, фрагментация, CRC, примеры) вынесено в отдельную библиотеку:
+## 6. Claiming: пошаговый поток
 
-👉 **[idryer-protocol/docs/UART_PROTOCOL.md](https://github.com/pavluchenkor/idryer-protocol/blob/master/docs/UART_PROTOCOL.md)**
+### 6.1 Точка входа
 
-**Что включает спецификация:**
-- Физический уровень и пины
-- Побайтовый разбор кадра
-- Типы сообщений (MessageKind)
-- Все структуры payload (Telemetry, Command, Log, Heartbeat)
-- Фрагментация больших данных (JSON конфига)
-- Таймауты и ретраи
-- Обработка ошибок
-- CRC16 расчёт
-- Hex примеры всех типов кадров
+Claim может быть запущен двумя путями:
 
-**Используемая библиотека:**
-```ini
-[env:esp32]
-lib_deps =
-    https://github.com/pavluchenkor/idryer-protocol.git
+- USB Serial: строка `START_CLAIM`
+- UART от RP2040: кадр `ClaimStart` (`MessageKind=0x70`)
+
+### 6.2 Provision (если нет token)
+
+ESP32 вызывает:
+
+`POST /devices/provision`
+
+Request:
+
+```json
+{
+  "serialNumber": "DEVICE_A1B2C3D4E5F6"
+}
 ```
 
-Эта спецификация охватывает полный цикл взаимодействия микроконтроллера с iDryer Portal через WebSocket API. При расширении набора датчиков добавляйте поля в `TelemetryDataDto` и согласуйте их с backend командой (DTO настроены в «whitelist»-режиме, поэтому незадекларированные поля игнорируются).
+Ожидаемые поля ответа, которые использует прошивка:
+
+```json
+{
+  "deviceToken": "...",
+  "isNew": true,
+  "isClaimed": false,
+  "deviceId": "..."
+}
+```
+
+- `deviceToken` сохраняется как `token`.
+- Если `isClaimed=true` и есть `deviceId`, claim считается восстановленным (recovery) без PIN.
+
+### 6.3 Register (получение PIN)
+
+ESP32 вызывает:
+
+`POST /devices/register`
+
+Request:
+
+```json
+{
+  "token": "<deviceToken>",
+  "serialNumber": "DEVICE_A1B2C3D4E5F6"
+}
+```
+
+Вариант A, обычный ответ:
+
+```json
+{
+  "pin": "12345678",
+  "remainingSeconds": 599
+}
+```
+
+Вариант B, recovery (уже привязано):
+
+```json
+{
+  "alreadyClaimed": true,
+  "deviceId": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+}
+```
+
+### 6.4 Доставка PIN
+
+После получения PIN ESP32 отправляет его:
+
+- в RP2040 по UART: `ClaimStatus{ status=WaitingClaim, pin, remainingSeconds }`
+- в USB Serial: `CLAIM_PIN:<pin>:<remainingSeconds>`
+
+Дополнительно при старте через USB:
+
+- `CLAIM_STARTED:OK` при успешном запуске процесса
+- `CLAIM_STARTED:ERROR` при ошибке старта
+
+### 6.5 Polling статуса claim
+
+ESP32 опрашивает backend:
+
+`GET /devices/check-claim/{token}`
+
+Интервал polling: `IDRYER_CLAIM_POLL_INTERVAL_MS = 5000` (5 секунд).
+
+Поведение:
+
+- `404` для `check-claim` трактуется как валидный ответ "еще не привязано".
+- При `claimed=true` считывается `deviceId`, сохраняется в NVS.
+
+### 6.6 Завершение claim
+
+После получения `deviceId`:
+
+- ESP32 отправляет в RP2040: `ClaimComplete{ success=1, deviceId }`
+- Cloud state: `AwaitingClaim -> Ready -> MqttConnecting -> Online`
+
+## 7. MQTT после claim
+
+MQTT подключение выполняется только когда есть:
+
+- `serialNumber`
+- `token`
+- `deviceId`
+
+Параметры CONNECT:
+
+- `clientId = serialNumber`
+- `username = serialNumber`
+- `password = token`
+
+Подписка:
+
+- `idryer/{serialNumber}/commands/#`
+
+Публикации устройства:
+
+- `info`
+- `telemetry`
+- `status`
+- `weights`
+- `rfid`
+- `events`
+- `config`
+- `config/delta`
+
+## 8. UART claim-кадры
+
+- `ClaimStart (0x70)`: RP2040 → ESP32, пустой payload
+- `ClaimStatus (0x71)`: ESP32 → RP2040
+  - `status`: `Idle | Provisioning | WaitingClaim | Claimed | Error`
+  - `pin[9]`
+  - `expiresAt`
+  - `remainingSeconds`
+- `ClaimComplete (0x72)`: ESP32 → RP2040
+  - `success`
+  - `deviceId[37]`
+
+## 9. Ошибки и recovery
+
+- Нет Wi-Fi: `requestClaim()` возвращает ошибку, claim не стартует.
+- Ошибка `provision/register`: claim не стартует или остается в ожидании, в зависимости от шага.
+- `register` вернул `alreadyClaimed=true`: сразу сохраняется `deviceId`, переход к `Ready`.
+- `provision` вернул `isClaimed=true` + `deviceId`: тоже recovery без PIN.
+
+## 10. Ограничения текущей реализации
+
+- `ClaimStatusPayload.expiresAt` пока отправляется как `0` (TODO в коде).
+- Ветвление `CLAIM_ALREADY` в USB-потоке требует доработки: при уже claimed `requestClaim()` сейчас возвращает `false`, и наружу уходит `CLAIM_STARTED:ERROR`.
+
+## 11. Краткий чек-лист интеграции
+
+1. Настроить Wi-Fi.
+2. Запустить claim (`START_CLAIM` или UART `ClaimStart`).
+3. Получить PIN и показать пользователю.
+4. Пользователь вводит PIN в портале.
+5. Дождаться `ClaimComplete` и сохранения `deviceId`.
+6. Проверить переход в `Online` и подписку на `commands/#`.
 
 ---
 
-## 📚 Связанные документы
-
-### iDryer Protocol (общая библиотека)
-
-**GitHub:** https://github.com/pavluchenkor/idryer-protocol
-
-| Документ | Описание |
-|----------|----------|
-| [UART_PROTOCOL.md](https://github.com/pavluchenkor/idryer-protocol/blob/master/docs/UART_PROTOCOL.md) | Детальная спецификация UART (RP2040 ↔ ESP32) |
-| [SYSTEM_MAP.md](https://github.com/pavluchenkor/idryer-protocol/blob/master/docs/SYSTEM_MAP.md) | Архитектура системы, компоненты, источники правды |
-| [mqtt-api-kit/](https://github.com/pavluchenkor/idryer-protocol/tree/master/docs/mqtt-api-kit) | MQTT API документация |
-| [error_defs.h](https://github.com/pavluchenkor/idryer-protocol/blob/master/docs/examples/error_defs.h) | Пример системы ошибок (для справки) |
-
-### Backend (iDryerPortal)
-
-| Документ | Описание |
-|----------|----------|
-| `backend/src/gateway/dto/` | DTO для WebSocket сообщений |
-| `backend/src/devices/` | API регистрации устройств |
-| `backend/prisma/schema.prisma` | Схема БД (Device, Session, Filament) |
-
-### RP2040 (контроллер)
-
-| Документ | Описание |
-|----------|----------|
-| `src/menu/menu_v2.yaml` | Структура меню устройства |
-| `src/error/error_defs.h` | Система ошибок (X-macros) |
-
----
-
-**Последнее обновление:** 2025-12-23
+Последнее обновление: **2026-03-04**.

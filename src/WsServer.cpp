@@ -11,7 +11,6 @@
 #include "WsServer.h"
 #include <WebSocketsServer.h>
 #include <ESPmDNS.h>
-#include <Preferences.h>
 #include <hal/hal_types.h>
 
 // =============================================================================
@@ -22,8 +21,7 @@ WsServer::WsServer(DryerUart::UartBridge* uart)
     : uart_(uart)
 {
     memset(deviceName_, 0, sizeof(deviceName_));
-    memset(pinStr_, 0, sizeof(pinStr_));
-    memset(pairedClients_, 0, sizeof(pairedClients_));
+    memset(deviceToken_, 0, sizeof(deviceToken_));
 }
 
 WsServer::~WsServer()
@@ -35,19 +33,15 @@ WsServer::~WsServer()
 // LIFECYCLE
 // =============================================================================
 
-void WsServer::begin(const char* deviceName, uint16_t pin)
+void WsServer::begin(const char* deviceName, const char* deviceToken)
 {
     if (enabled_) return;
 
     strncpy(deviceName_, deviceName, sizeof(deviceName_) - 1);
     deviceName_[sizeof(deviceName_) - 1] = '\0';
 
-    // PIN приходит от MCU (4 цифры, хранится в EEPROM RP2040)
-    pin_ = pin;
-    snprintf(pinStr_, sizeof(pinStr_), "%04u", pin_);
-
-    // Загружаем привязанных клиентов из NVS
-    loadClientsFromNvs();
+    strncpy(deviceToken_, deviceToken ? deviceToken : "", sizeof(deviceToken_) - 1);
+    deviceToken_[sizeof(deviceToken_) - 1] = '\0';
 
     // Запускаем WebSocket сервер на порту 81
     ws_ = new WebSocketsServer(81);
@@ -62,8 +56,7 @@ void WsServer::begin(const char* deviceName, uint16_t pin)
 
     enabled_ = true;
 
-    HAL_LOG_INFO("WS", "Server started: %s.local:81, PIN=%s, paired=%d",
-                 deviceName_, pinStr_, pairedCount_);
+    HAL_LOG_INFO("WS", "Server started: %s.local:81", deviceName_);
 }
 
 void WsServer::stop()
@@ -89,117 +82,6 @@ void WsServer::loop()
 {
     if (!enabled_ || !ws_) return;
     ws_->loop();
-}
-
-// =============================================================================
-// NVS
-// =============================================================================
-
-void WsServer::loadClientsFromNvs()
-{
-    Preferences prefs;
-    prefs.begin("ws", true); // read-only
-
-    pairedCount_ = prefs.getUChar("cnt", 0);
-    if (pairedCount_ > MAX_PAIRED) pairedCount_ = MAX_PAIRED;
-
-    for (uint8_t i = 0; i < pairedCount_; i++) {
-        char key[8];
-        snprintf(key, sizeof(key), "c%d", i);
-        String cid = prefs.getString(key, "");
-        strncpy(pairedClients_[i], cid.c_str(), sizeof(pairedClients_[i]) - 1);
-        pairedClients_[i][sizeof(pairedClients_[i]) - 1] = '\0';
-    }
-
-    prefs.end();
-
-    HAL_LOG_INFO("WS", "NVS loaded: paired=%d", pairedCount_);
-}
-
-void WsServer::saveClientsToNvs()
-{
-    Preferences prefs;
-    prefs.begin("ws", false); // read-write
-
-    prefs.putUChar("cnt", pairedCount_);
-
-    for (uint8_t i = 0; i < pairedCount_; i++) {
-        char key[8];
-        snprintf(key, sizeof(key), "c%d", i);
-        prefs.putString(key, pairedClients_[i]);
-    }
-
-    // Очищаем старые ключи если клиентов стало меньше
-    for (uint8_t i = pairedCount_; i < MAX_PAIRED; i++) {
-        char key[8];
-        snprintf(key, sizeof(key), "c%d", i);
-        prefs.remove(key);
-    }
-
-    prefs.end();
-}
-
-// =============================================================================
-// AUTH
-// =============================================================================
-
-bool WsServer::isClientPaired(const char* clientId) const
-{
-    for (uint8_t i = 0; i < pairedCount_; i++) {
-        if (strcmp(pairedClients_[i], clientId) == 0) {
-            return true;
-        }
-    }
-    return false;
-}
-
-bool WsServer::authenticateClient(const char* pinCode, const char* clientId)
-{
-    if (!clientId || strlen(clientId) == 0) return false;
-
-    // Уже привязан — авторизация без PIN
-    if (isClientPaired(clientId)) {
-        HAL_LOG_INFO("WS", "Client already paired: %s", clientId);
-        return true;
-    }
-
-    // Проверяем PIN (сравниваем со строковым представлением)
-    if (!pinCode || strcmp(pinCode, pinStr_) != 0) {
-        HAL_LOG_WARN("WS", "Invalid PIN from client: %s", clientId);
-        return false;
-    }
-
-    // Проверяем лимит
-    if (pairedCount_ >= MAX_PAIRED) {
-        HAL_LOG_WARN("WS", "Max paired clients reached (%d)", MAX_PAIRED);
-        return false;
-    }
-
-    // Привязываем нового клиента
-    strncpy(pairedClients_[pairedCount_], clientId, sizeof(pairedClients_[0]) - 1);
-    pairedClients_[pairedCount_][sizeof(pairedClients_[0]) - 1] = '\0';
-    pairedCount_++;
-
-    saveClientsToNvs();
-
-    HAL_LOG_INFO("WS", "New client paired: %s (total=%d)", clientId, pairedCount_);
-    return true;
-}
-
-void WsServer::resetClients()
-{
-    pairedCount_ = 0;
-    memset(pairedClients_, 0, sizeof(pairedClients_));
-    saveClientsToNvs();
-
-    // Отключаем текущего клиента
-    if (ws_ && connectedClient_ >= 0) {
-        ws_->disconnect(connectedClient_);
-    }
-    connectedClient_ = -1;
-    clientAuthorized_ = false;
-
-    HAL_LOG_INFO("WS", "All paired clients reset");
 }
 
 // =============================================================================
@@ -255,11 +137,9 @@ void WsServer::handleWsMessage(uint8_t num, const char* json, size_t length)
 
     // Auth — должен быть первым сообщением
     if (strcmp(type, "auth") == 0) {
-        const char* pinCode = doc["pin"] | "";
-        const char* clientId = doc["clientId"] | "";
+        const char* token = doc["token"] | "";
 
-        // Попытка авторизации с известным clientId (без PIN)
-        if (strlen(pinCode) == 0 && isClientPaired(clientId)) {
+        if (deviceToken_[0] != '\0' && strcmp(token, deviceToken_) == 0) {
             clientAuthorized_ = true;
 
             StaticJsonDocument<128> resp;
@@ -267,27 +147,14 @@ void WsServer::handleWsMessage(uint8_t num, const char* json, size_t length)
             resp["deviceName"] = deviceName_;
             sendJson(nullptr, resp);
 
-            HAL_LOG_INFO("WS", "Client auto-authorized: %s", clientId);
-            return;
-        }
-
-        if (authenticateClient(pinCode, clientId)) {
-            clientAuthorized_ = true;
-
-            StaticJsonDocument<128> resp;
-            resp["type"] = "auth_ok";
-            resp["deviceName"] = deviceName_;
-            sendJson(nullptr, resp);
+            HAL_LOG_INFO("WS", "Client authorized");
         } else {
-            StaticJsonDocument<128> resp;
+            StaticJsonDocument<64> resp;
             resp["type"] = "auth_fail";
-
-            if (pairedCount_ >= MAX_PAIRED && !isClientPaired(clientId)) {
-                resp["reason"] = "max_clients";
-            } else {
-                resp["reason"] = "invalid_pin";
-            }
+            resp["reason"] = "invalid_token";
             sendJson(nullptr, resp);
+
+            HAL_LOG_WARN("WS", "Client auth failed: invalid token");
         }
         return;
     }
@@ -339,6 +206,33 @@ void WsServer::sendJson(const char* type, JsonDocument& doc)
         size_t len = serializeJson(doc, buf, sizeof(buf));
         ws_->sendTXT(connectedClient_, buf, len);
     }
+}
+
+void WsServer::sendWrappedJsonRaw(const char* type, const char* json, size_t length)
+{
+    if (!ws_ || connectedClient_ < 0 || !type || !json || length == 0) return;
+
+    char prefix[48];
+    int prefixLen = snprintf(prefix, sizeof(prefix), "{\"type\":\"%s\",\"data\":", type);
+    if (prefixLen <= 0 || static_cast<size_t>(prefixLen) >= sizeof(prefix)) {
+        HAL_LOG_WARN("WS", "Raw wrapper prefix overflow for type=%s", type);
+        return;
+    }
+
+    const size_t totalLen = static_cast<size_t>(prefixLen) + length + 1;
+    char* buf = static_cast<char*>(malloc(totalLen + 1));
+    if (!buf) {
+        HAL_LOG_WARN("WS", "Out of memory for raw %s wrapper (%u bytes)", type, static_cast<unsigned>(totalLen));
+        return;
+    }
+
+    memcpy(buf, prefix, static_cast<size_t>(prefixLen));
+    memcpy(buf + prefixLen, json, length);
+    buf[totalLen - 1] = '}';
+    buf[totalLen] = '\0';
+
+    ws_->sendTXT(connectedClient_, buf, totalLen);
+    free(buf);
 }
 
 // =============================================================================
@@ -461,23 +355,9 @@ void WsServer::sendConfig(const char* json, uint16_t length, bool isDelta)
 {
     if (!isClientConnected()) return;
 
-    // Ограничение текущей реализации: JSON должен влезать в ~2 KB документ.
-    // Если полный config больше, deserializeJson вернёт ошибку и отправка не состоится.
-    DynamicJsonDocument doc(2048);
-    DeserializationError err = deserializeJson(doc, json, length);
-    if (err) {
-        HAL_LOG_WARN("WS", "Config JSON parse error: %s", err.c_str());
-        return;
-    }
-
-    // Обёртка
-    StaticJsonDocument<2048> wrapper;
-    wrapper["type"] = "config";
-    wrapper["data"] = doc.as<JsonObject>();
-
-    char buf[2048];
-    size_t len = serializeJson(wrapper, buf, sizeof(buf));
-    ws_->sendTXT(connectedClient_, buf, len);
+    // Для config raw JSON уже подготовлен в IdryerDevice для MQTT публикации.
+    // Повторный deserialize/serialize здесь не нужен и ломает full config на ~2 KB лимите.
+    sendWrappedJsonRaw(isDelta ? "config_delta" : "config", json, length);
 }
 
 void WsServer::sendInfo(uint8_t unitsCount, const DryerUart::UnitConfig* units,
@@ -523,9 +403,9 @@ DryerUart::WsStatusPayload WsServer::getStatus() const
         status.state = DryerUart::WsState::Listening;
     }
 
-    status.pin = pin_;
-    status.pairedCount = pairedCount_;
-    status.maxClients = MAX_PAIRED;
+    status.pin = 0;
+    status.pairedCount = clientAuthorized_ ? 1 : 0;
+    status.maxClients = 1;
 
     return status;
 }

@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-#define MENU_META_COUNT 204
+#define MENU_META_COUNT 202
 #define MENU_LANG_COUNT 2
 
 typedef enum {
@@ -840,26 +840,18 @@ static const MenuMeta g_menu_meta[MENU_META_COUNT] = {
       META_VT_U8, 0.0f, 3.0f, 1.0f, META_SCOPE_GLOBAL },
     // [198] ws_local
     { 198, { "WS ЛОКАЛЬНЫЙ", "WS LOCAL" }, { nullptr, nullptr },
-      META_SUBMENU, 186, 199, 3,
+      META_SUBMENU, 186, 199, 1,
       META_VT_F32, 0.0f, 0.0f, 0.0f, META_SCOPE_PER_UNIT },
     // [199] ws_enabled
     { 199, { "ВКЛ/ВЫКЛ", "ON/OFF" }, { nullptr, nullptr },
       META_TOGGLE, 198, -1, 0,
       META_VT_BOOL, 0.0f, 0.0f, 1.0f, META_SCOPE_GLOBAL },
-    // [200] ws_pin
-    { 200, { "ПИН", "PIN" }, { nullptr, nullptr },
-      META_VALUE, 198, -1, 0,
-      META_VT_U16, 0.0f, 9999.0f, 0.0f, META_SCOPE_GLOBAL },
-    // [201] ws_reset_clients
-    { 201, { "СБРОС КЛИЕНТОВ", "RESET CLIENTS" }, { nullptr, nullptr },
-      META_ACTION, 198, -1, 0,
-      META_VT_F32, 0.0f, 0.0f, 0.0f, META_SCOPE_PER_UNIT },
-    // [202] units_count
-    { 202, { "КОЛ-ВО ЮНИТОВ", "UNITS" }, { nullptr, nullptr },
+    // [200] units_count
+    { 200, { "КОЛ-ВО ЮНИТОВ", "UNITS" }, { nullptr, nullptr },
       META_VALUE, 186, -1, 0,
       META_VT_U8, 1.0f, 3.0f, 1.0f, META_SCOPE_GLOBAL },
-    // [203] language
-    { 203, { "ЯЗЫК", "LANGUAGE" }, { nullptr, nullptr },
+    // [201] language
+    { 201, { "ЯЗЫК", "LANGUAGE" }, { nullptr, nullptr },
       META_VALUE, 186, -1, 0,
       META_VT_U8, 0.0f, 1.0f, 1.0f, META_SCOPE_GLOBAL },
 };

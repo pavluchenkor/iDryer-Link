@@ -5,6 +5,9 @@
  * Активируется из меню RP2040 через UART (WsEnable 0x73).
  * Полный аналог MQTT API: те же JSON форматы, те же команды.
  * mDNS имя совпадает с serial number устройства.
+ *
+ * Аутентификация: клиент предъявляет device_token (выдан порталом).
+ * Никакого отдельного PIN и локальной привязки клиентов нет.
  */
 
 #pragma once
@@ -12,6 +15,7 @@
 #include <functional>
 #include <ArduinoJson.h>
 #include <uart/uart_bridge.h>
+#include <core/config.h>
 
 class WebSocketsServer;
 
@@ -23,9 +27,9 @@ public:
     /**
      * @brief Запуск WS сервера + mDNS
      * @param deviceName Имя устройства (serial number, например "DEVICE_4AF988_3847291")
-     * @param pin PIN-код 4 цифры (1000-9999), генерируется на MCU
+     * @param deviceToken Device token из портала (хранится в NVS, известен приложению)
      */
-    void begin(const char* deviceName, uint16_t pin);
+    void begin(const char* deviceName, const char* deviceToken);
 
     /** @brief Остановка WS сервера + mDNS */
     void stop();
@@ -49,15 +53,13 @@ public:
     /** @brief Получить текущий статус для UART (WsStatusPayload) */
     DryerUart::WsStatusPayload getStatus() const;
 
-    /** @brief Сброс привязанных клиентов */
-    void resetClients();
-
     /** @brief Callback для входящих команд от WS клиента */
     using CommandCallback = std::function<void(const char* command, JsonObjectConst data)>;
     void setCommandCallback(CommandCallback cb) { cmdCallback_ = cb; }
 
 private:
-    char deviceName_[40];  // "DEVICE_XXXXXX_XXXXXXX"
+    char deviceName_[40];                    // "DEVICE_XXXXXX_XXXXXXX"
+    char deviceToken_[IDRYER_MAX_TOKEN_LEN]; // Device token для проверки auth
 
     // WebSocket
     WebSocketsServer* ws_ = nullptr;
@@ -65,27 +67,13 @@ private:
     int8_t connectedClient_ = -1;
     bool clientAuthorized_ = false;
 
-    // PIN и клиенты
-    uint16_t pin_ = 0;   // PIN 4 цифры (от MCU)
-    char pinStr_[5];      // "1234\0"
-    static constexpr uint8_t MAX_PAIRED = 5;
-    char pairedClients_[MAX_PAIRED][40];
-    uint8_t pairedCount_ = 0;
-
-    // NVS (только клиенты, PIN от MCU)
-    void loadClientsFromNvs();
-    void saveClientsToNvs();
-
-    // Auth
-    bool authenticateClient(const char* pin, const char* clientId);
-    bool isClientPaired(const char* clientId) const;
-
     // WS события
     void onWsEvent(uint8_t num, uint8_t type, uint8_t* payload, size_t length);
     void handleWsMessage(uint8_t num, const char* json, size_t length);
 
     // JSON helpers
     void sendJson(const char* type, JsonDocument& doc);
+    void sendWrappedJsonRaw(const char* type, const char* json, size_t length);
 
     // Вспомогательные форматеры (аналогично TelemetryPublisher)
     static void formatUnitId(char* buf, size_t size, uint8_t unitId);

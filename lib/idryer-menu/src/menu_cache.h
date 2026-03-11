@@ -8,7 +8,7 @@
 
 #define MENU_MAX_UNITS 3
 
-// Total menu items: 204, with values: 116
+// Total menu items: 202, with values: 115
 
 // Значение одного элемента меню
 union MenuValue {
