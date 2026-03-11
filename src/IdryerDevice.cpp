@@ -189,28 +189,20 @@ namespace idryer
 
         // WebSocket Local Access обработчики
         uart_->setWsEnableHandler([this](const DryerUart::WsEnablePayload &p, const DryerUart::FrameHeader &h)
-                                   {
-            HAL_LOG_INFO("UART", "WsEnable: enable=%d, pin=%u", p.enable, p.pin);
+                                  {
+            HAL_LOG_INFO("UART", "WsEnable: enable=%d", p.enable);
             if (wsServer_) {
                 if (p.enable) {
-                    wsServer_->begin(cloud_.getIdentity().serialNumber, p.pin);
+                    wsServer_->begin(cloud_.getIdentity().serialNumber,
+                                     cloud_.getIdentity().token);
                 } else {
                     wsServer_->stop();
                 }
-                // Отправляем статус обратно
-                uart_->sendWsStatus(wsServer_->getStatus());
-            } });
-
-        uart_->setWsResetClientsHandler([this](const DryerUart::FrameHeader &h)
-                                         {
-            HAL_LOG_INFO("UART", "WsResetClients");
-            if (wsServer_) {
-                wsServer_->resetClients();
                 uart_->sendWsStatus(wsServer_->getStatus());
             } });
 
         uart_->setWsStatusRequestHandler([this](const DryerUart::FrameHeader &h)
-                                          {
+                                         {
             HAL_LOG_INFO("UART", "WsStatusRequest");
             if (wsServer_) {
                 uart_->sendWsStatus(wsServer_->getStatus());
@@ -219,7 +211,7 @@ namespace idryer
                 DryerUart::WsStatusPayload status{};
                 status.state = DryerUart::WsState::Disabled;
                 status.pairedCount = 0;
-                status.maxClients = 5;
+                status.maxClients = 1;
                 uart_->sendWsStatus(status);
             } });
 
@@ -239,7 +231,8 @@ namespace idryer
         cloud_.loop();
 
         // Обрабатываем WS сервер (если включён)
-        if (wsServer_) wsServer_->loop();
+        if (wsServer_)
+            wsServer_->loop();
 
         // Heartbeat каждые 5 секунд
         processHeartbeat();
@@ -292,6 +285,16 @@ namespace idryer
     {
         HAL_LOG_INFO("DEVICE", "Hello from RP2040: units=%d", payload.unitsCount);
 
+        if (wifi_->isConnected() && payload.mcuSerial[0] != '\0')
+        {
+            Serial.printf("RP2040_SERIAL:%s\n", payload.mcuSerial);
+            Serial.flush();
+        }
+
+        // Кэшируем для повторной публикации при переподключении MQTT
+        lastHello_ = payload;
+        lastHelloValid_ = true;
+
         // Обновляем состояние
         unitsCount_ = payload.unitsCount;
 
@@ -320,6 +323,18 @@ namespace idryer
             HAL_LOG_INFO("DEVICE", "HelloAck sent (IP=%s, SSID=%s)", ipStr, ack.ssid);
         }
 
+        // Переключаем MQTT топик на mcuSerial (RP2040 identity) если устройство уже привязано
+        // и серийник ещё не обновлён (первый boot после claming)
+        if (payload.mcuSerial[0] != '\0' && cloud_.getIdentity().hasDeviceId())
+        {
+            if (strcmp(cloud_.getIdentity().serialNumber, payload.mcuSerial) != 0)
+            {
+                HAL_LOG_INFO("DEVICE", "Switching MQTT topic: %s -> %s (mcuSerial)",
+                             cloud_.getIdentity().serialNumber, payload.mcuSerial);
+                cloud_.switchSerialNumber(payload.mcuSerial);
+            }
+        }
+
         // Всегда публикуем info при получении Hello (если онлайн)
         if (cloud_.isOnline())
         {
@@ -346,8 +361,9 @@ namespace idryer
                                payload.workTimeCounter, payload.mcuSerial);
 
         // WS параллельная публикация info
-        if (wsServer_) wsServer_->sendInfo(unitsCount_, payload.units, hwVersion, fwVersion,
-                                            payload.workTimeCounter, payload.mcuSerial);
+        if (wsServer_)
+            wsServer_->sendInfo(unitsCount_, payload.units, hwVersion, fwVersion,
+                                payload.workTimeCounter, payload.mcuSerial);
 
         HAL_LOG_INFO("DEVICE", "Published info: units=%d hw=%s fw=%s",
                      unitsCount_, hwVersion, fwVersion);
@@ -365,7 +381,8 @@ namespace idryer
         }
 
         // WS параллельная публикация
-        if (wsServer_) wsServer_->sendTelemetry(payload);
+        if (wsServer_)
+            wsServer_->sendTelemetry(payload);
     }
 
     void IdryerDevice::handleStatus(const DryerUart::StatusPayload &payload,
@@ -381,7 +398,8 @@ namespace idryer
         }
 
         // WS параллельная публикация
-        if (wsServer_) wsServer_->sendStatus(payload);
+        if (wsServer_)
+            wsServer_->sendStatus(payload);
     }
 
     void IdryerDevice::handleWeights(const DryerUart::WeightsPayload &payload,
@@ -396,7 +414,8 @@ namespace idryer
         }
 
         // WS параллельная публикация
-        if (wsServer_) wsServer_->sendWeights(payload);
+        if (wsServer_)
+            wsServer_->sendWeights(payload);
     }
 
     void IdryerDevice::handleRfidEvent(const DryerUart::RfidPayload &payload,
@@ -425,7 +444,8 @@ namespace idryer
         }
 
         // WS параллельная публикация
-        if (wsServer_) wsServer_->sendRfid(payload);
+        if (wsServer_)
+            wsServer_->sendRfid(payload);
     }
 
     void IdryerDevice::handleCommandAck(const DryerUart::AckPayload &payload,
@@ -590,7 +610,8 @@ namespace idryer
             }
 
             // WS параллельная публикация конфига
-            if (wsServer_) wsServer_->sendConfig(publishJson, publishLen, isDelta);
+            if (wsServer_)
+                wsServer_->sendConfig(publishJson, publishLen, isDelta);
 
             // Публикуем в MQTT
             bool published = publishConfig(publishJson, publishLen, isDelta);
@@ -794,10 +815,13 @@ namespace idryer
             HAL_LOG_INFO("DEVICE", "Sent HelloAck with IP=%s", ipStr);
         }
 
-        // При подключении к MQTT - публикуем info если Hello получен
-        if (newState == cloud::CloudState::Online && self->helloReceived_)
+        // При подключении к MQTT - публикуем info если Hello уже был получен
+        if (newState == cloud::CloudState::Online && self->lastHelloValid_)
         {
-            // Info будет опубликован в publishCachedData или при следующем Hello
+            self->publisher_.resetInfoPublished();
+            self->publishDeviceInfo(self->lastHello_);
+            HAL_LOG_INFO("DEVICE", "Re-published info after MQTT reconnect (mcuSerial=%s)",
+                         self->lastHello_.mcuSerial);
         }
     }
 
@@ -842,6 +866,20 @@ namespace idryer
             payload.deviceId[sizeof(payload.deviceId) - 1] = '\0';
 
             self->uart_->sendClaimComplete(payload);
+        }
+
+        // Если mcuSerial уже известен (Hello от RP2040 пришёл до claiming) —
+        // переключаем MQTT топик на mcuSerial прямо сейчас, чтобы первое
+        // подключение к MQTT было уже на правильном топике
+        if (self->lastHelloValid_ && self->lastHello_.mcuSerial[0] != '\0')
+        {
+            const char *currentSerial = self->cloud_.getIdentity().serialNumber;
+            if (strcmp(currentSerial, self->lastHello_.mcuSerial) != 0)
+            {
+                HAL_LOG_INFO("DEVICE", "Switching MQTT topic after claim: %s -> %s",
+                             currentSerial, self->lastHello_.mcuSerial);
+                self->cloud_.switchSerialNumber(self->lastHello_.mcuSerial);
+            }
         }
     }
 

@@ -130,6 +130,10 @@ private:
     bool helloReceived_ = false;   // Публикации разрешаются после первого Hello.
     uint8_t unitsCount_ = 1;       // Актуализируется из Hello payload.
 
+    // Кэш последнего Hello от MCU — публикуется повторно при переподключении MQTT.
+    DryerUart::HelloPayload lastHello_{};
+    bool lastHelloValid_ = false;
+
     // Офлайн-кэш: последнее RFID событие на ридер.
     static constexpr uint8_t MAX_RFID_READERS = 4;
     DryerUart::RfidPayload latestRfid_[MAX_RFID_READERS]{};
