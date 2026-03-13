@@ -92,7 +92,7 @@ namespace idryer
                                ICredentialStore *store,
                                DryerUart::UartBridge *uart,
                                const char *apiBaseUrl)
-        : wifi_(wifi), http_(http), store_(store), uart_(uart), api_(http, apiBaseUrl ? apiBaseUrl : IDRYER_API_BASE), cloud_(wifi, store, &api_, &mqtt_), publisher_(&mqtt_), cmdHandler_(uart)
+        : wifi_(wifi), http_(http), store_(store), uart_(uart), api_(http, apiBaseUrl ? apiBaseUrl : IDRYER_API_BASE), cloud_(wifi, store, &api_, &mqtt_), publisher_(&mqtt_), cmdHandler_(uart), haPublisher_(&haMqtt_)
     {
     }
 
@@ -129,6 +129,9 @@ namespace idryer
 
         // Отправляем первый Hello Request к MCU
         sendHelloRequest();
+
+        // Попытка инициализации Home Assistant (опционально)
+        initHomeAssistant();
     }
 
     // =============================================================================
@@ -229,6 +232,10 @@ namespace idryer
 
         // Обрабатываем облачную машину состояний
         cloud_.loop();
+
+        // Обрабатываем Home Assistant MQTT (если включён)
+        if (haEnabled_)
+            haMqtt_.loop();
 
         // Обрабатываем WS сервер (если включён)
         if (wsServer_)
@@ -342,6 +349,12 @@ namespace idryer
             publisher_.resetInfoPublished();
             publishDeviceInfo(payload);
         }
+
+        // Публикуем Discovery в HA при первом Hello
+        if (haEnabled_ && haMqtt_.isConnected() && !haPublisher_.isDiscoveryPublished())
+        {
+            publishHADiscovery();
+        }
     }
 
     void IdryerDevice::publishDeviceInfo(const DryerUart::HelloPayload &payload)
@@ -374,10 +387,16 @@ namespace idryer
     {
         HAL_LOG_DEBUG("DEVICE", "Telemetry: count=%d", payload.count);
 
-        // Публикуем сразу, без кэширования (данные придут снова через 5 сек)
+        // Публикуем в облако
         if (cloud_.isOnline() && helloReceived_)
         {
             publisher_.publishTelemetry(payload);
+        }
+
+        // Публикуем в Home Assistant
+        if (haEnabled_ && haMqtt_.isConnected() && helloReceived_)
+        {
+            haPublisher_.publishTelemetry(payload);
         }
 
         // WS параллельная публикация
@@ -391,10 +410,16 @@ namespace idryer
         HAL_LOG_DEBUG("DEVICE", "Status: uptime=%d count=%d",
                       payload.uptime, payload.count);
 
-        // Публикуем сразу (retained топик)
+        // Публикуем в облако (retained топик)
         if (cloud_.isOnline() && helloReceived_)
         {
             publisher_.publishStatus(payload);
+        }
+
+        // Публикуем в Home Assistant
+        if (haEnabled_ && haMqtt_.isConnected() && helloReceived_)
+        {
+            haPublisher_.publishStatus(payload);
         }
 
         // WS параллельная публикация
@@ -470,17 +495,19 @@ namespace idryer
         HAL_LOG_ERROR("DEVICE", "UART Error: code=%d seq=%d remote=%d",
                       static_cast<int>(payload.code), payload.lastSequence, remote);
 
-        // Публикуем ошибку протокола в events топик
+        // Формируем сообщение об ошибке
+        char msg[128];
+        snprintf(msg, sizeof(msg), "UART protocol error: code=%d seq=%d %s",
+                 static_cast<int>(payload.code), payload.lastSequence,
+                 remote ? "(remote)" : "(local)");
+
+        // Публикуем в облако
         if (cloud_.isOnline())
         {
             StaticJsonDocument<256> doc;
             doc["severity"] = "error";
             doc["source"] = "UART";
             doc["event"] = remote ? "PROTOCOL_ERROR_REMOTE" : "PROTOCOL_ERROR_LOCAL";
-
-            char msg[64];
-            snprintf(msg, sizeof(msg), "UART protocol error: code=%d seq=%d",
-                     static_cast<int>(payload.code), payload.lastSequence);
             doc["message"] = msg;
 
             char timestamp[32];
@@ -490,6 +517,12 @@ namespace idryer
             {
                 HAL_LOG_INFO("DEVICE", "Published UART error event");
             }
+        }
+
+        // Публикуем в Home Assistant
+        if (haEnabled_ && haMqtt_.isConnected())
+        {
+            haPublisher_.publishAlert(0xFF, msg, "error");
         }
     }
 
@@ -540,6 +573,21 @@ namespace idryer
             else
             {
                 HAL_LOG_WARN("DEVICE", "Failed to publish log event");
+            }
+        }
+
+        // Публикуем в Home Assistant (только errors и warnings)
+        if (haEnabled_ && haMqtt_.isConnected())
+        {
+            char severity[11] = {0};
+            char message[101] = {0};
+            strncpy(severity, log->severity, sizeof(log->severity));
+            strncpy(message, log->message, sizeof(log->message));
+
+            // Публикуем только важные события
+            if (strcmp(severity, "error") == 0 || strcmp(severity, "warning") == 0)
+            {
+                haPublisher_.publishAlert(log->unitId, message, severity);
             }
         }
     }
@@ -902,6 +950,75 @@ namespace idryer
             payload.remainingSeconds = 0;
 
             self->uart_->sendClaimStatus(payload);
+        }
+    }
+
+    // =============================================================================
+    // HOME ASSISTANT ИНТЕГРАЦИЯ
+    // =============================================================================
+
+    void IdryerDevice::initHomeAssistant()
+    {
+        HAL_LOG_INFO("HA", "Initializing Home Assistant integration...");
+
+        // Ждем пока WiFi подключится (через cloud state machine)
+        // Попробуем найти HA через mDNS
+        if (haMqtt_.discover())
+        {
+            HAL_LOG_INFO("HA", "✓ Home Assistant discovered!");
+
+            // Подключаемся к MQTT брокеру
+            const char *serialNumber = cloud_.getIdentity().serialNumber;
+            if (haMqtt_.connect(serialNumber))
+            {
+                haEnabled_ = true;
+                HAL_LOG_INFO("HA", "✓ Connected to Home Assistant MQTT");
+
+                // Публикуем Discovery конфигурацию
+                if (helloReceived_ && lastHelloValid_)
+                {
+                    publishHADiscovery();
+                }
+            }
+            else
+            {
+                HAL_LOG_WARN("HA", "✗ Failed to connect to MQTT broker");
+            }
+        }
+        else
+        {
+            HAL_LOG_INFO("HA", "Home Assistant not found in network (homeassistant.local)");
+            HAL_LOG_INFO("HA", "Device will work in cloud-only mode");
+        }
+    }
+
+    void IdryerDevice::publishHADiscovery()
+    {
+        if (!haEnabled_ || !haMqtt_.isConnected())
+        {
+            return;
+        }
+
+        // Извлекаем версии из последнего Hello
+        char hwVersion[16];
+        strncpy(hwVersion, lastHello_.hardwareVersion, sizeof(hwVersion) - 1);
+        hwVersion[sizeof(hwVersion) - 1] = '\0';
+
+        char fwVersion[16];
+        snprintf(fwVersion, sizeof(fwVersion), "%d.%d.%d",
+                 (lastHello_.firmwareVersion >> 16) & 0xFF,
+                 (lastHello_.firmwareVersion >> 8) & 0xFF,
+                 lastHello_.firmwareVersion & 0xFF);
+
+        // Публикуем Discovery
+        const char *serialNumber = cloud_.getIdentity().serialNumber;
+        if (haPublisher_.publishDiscovery(serialNumber, unitsCount_, hwVersion, fwVersion))
+        {
+            HAL_LOG_INFO("HA", "✓ Discovery configuration published");
+        }
+        else
+        {
+            HAL_LOG_ERROR("HA", "✗ Failed to publish Discovery");
         }
     }
 

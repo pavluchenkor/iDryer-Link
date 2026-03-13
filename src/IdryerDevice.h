@@ -13,6 +13,8 @@
 #include <cloud/http_api.h>
 #include <config/config_manager.h>
 #include <mqtt/mqtt_client.h>
+#include <mqtt/ha_mqtt_client.h>
+#include <cloud/ha_publisher.h>
 #include <uart/uart_bridge.h>
 #include <device/interfaces/IWifiManager.h>
 #include <device/interfaces/IHttpClient.h>
@@ -127,6 +129,11 @@ private:
     cloud::TelemetryPublisher publisher_;
     cloud::CommandHandler cmdHandler_;
 
+    // Home Assistant (опциональный)
+    ha::HaMqttClient haMqtt_;
+    ha::HaPublisher haPublisher_;
+    bool haEnabled_ = false;
+
     bool helloReceived_ = false;   // Публикации разрешаются после первого Hello.
     uint8_t unitsCount_ = 1;       // Актуализируется из Hello payload.
 
@@ -164,6 +171,10 @@ private:
     void publishCachedData();
     void publishDeviceInfo(const DryerUart::HelloPayload& payload);
     void syncTimeFromBackend(const char* timestamp);
+
+    // Home Assistant
+    void initHomeAssistant();
+    void publishHADiscovery();
 
     void handleMqttCommand(const char* command, JsonObjectConst data);
 
