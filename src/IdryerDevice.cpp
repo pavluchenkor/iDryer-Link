@@ -432,10 +432,16 @@ namespace idryer
     {
         HAL_LOG_DEBUG("DEVICE", "Weights: count=%d", payload.count);
 
-        // Публикуем сразу, без кэширования
+        // Публикуем в облако
         if (cloud_.isOnline() && helloReceived_)
         {
             publisher_.publishWeights(payload);
+        }
+
+        // Публикуем в Home Assistant
+        if (haEnabled_ && haMqtt_.isConnected() && helloReceived_)
+        {
+            haPublisher_.publishWeights(payload);
         }
 
         // WS параллельная публикация
