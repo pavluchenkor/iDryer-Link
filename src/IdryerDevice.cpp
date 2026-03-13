@@ -609,11 +609,11 @@ namespace idryer
                 HAL_LOG_INFO("DEVICE", "%.*s", publishLen, publishJson);
             }
 
-            // WS параллельная публикация конфига
-            if (wsServer_)
-                wsServer_->sendConfig(publishJson, publishLen, isDelta);
+            // WS для delta — отправляем здесь; full-конфиг WS отправляется внутри publishConfig
+            if (wsServer_ && isDelta)
+                wsServer_->sendConfig(publishJson, publishLen, true);
 
-            // Публикуем в MQTT
+            // Публикуем в MQTT (и WS full внутри)
             bool published = publishConfig(publishJson, publishLen, isDelta);
             if (isDelta)
             {
@@ -650,12 +650,6 @@ namespace idryer
 
     bool IdryerDevice::publishConfig(const char *json, uint16_t length, bool isDelta)
     {
-        if (!cloud_.isOnline())
-        {
-            HAL_LOG_WARN("DEVICE", "Cannot publish config: offline");
-            return false;
-        }
-
         const char *topicName = isDelta ? "config/delta" : "config";
 
         if (isDelta)
@@ -699,7 +693,16 @@ namespace idryer
             HAL_LOG_WARN("DEVICE", "Failed to build full JSON, using raw");
         }
 
+        // WS: отправляем тот же full JSON (один вызов menu_buildFullJson на оба канала)
+        if (wsServer_)
+            wsServer_->sendConfig(publishJson, publishLen, false);
+
         // Публикуем с автоматической фрагментацией
+        if (!cloud_.isOnline())
+        {
+            HAL_LOG_WARN("DEVICE", "Cannot publish config: offline");
+            return false;
+        }
         uint16_t chunks = mqtt_.publishConfigRaw(publishJson, publishLen);
 
         if (chunks > 0)
