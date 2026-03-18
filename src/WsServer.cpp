@@ -13,6 +13,24 @@
 #include <ESPmDNS.h>
 #include <hal/hal_types.h>
 
+// Подкласс для доступа к protected-методам фрагментированной отправки
+class WsServerImpl : public WebSocketsServer {
+public:
+    explicit WsServerImpl(uint16_t port) : WebSocketsServer(port) {}
+
+    void sendFragmented(uint8_t num, const char* prefix, size_t prefixLen,
+                        const char* json, size_t jsonLen) {
+        WSclient_t* client = &_clients[num];
+        char suffix = '}';
+        sendFrame(client, WSop_text,
+            reinterpret_cast<uint8_t*>(const_cast<char*>(prefix)), prefixLen, false);
+        sendFrame(client, WSop_continuation,
+            reinterpret_cast<uint8_t*>(const_cast<char*>(json)), jsonLen, false);
+        sendFrame(client, WSop_continuation,
+            reinterpret_cast<uint8_t*>(&suffix), 1, true);
+    }
+};
+
 // =============================================================================
 // КОНСТРУКТОР / ДЕСТРУКТОР
 // =============================================================================
@@ -44,7 +62,7 @@ void WsServer::begin(const char* deviceName, const char* deviceToken)
     deviceToken_[sizeof(deviceToken_) - 1] = '\0';
 
     // Запускаем WebSocket сервер на порту 81
-    ws_ = new WebSocketsServer(81);
+    ws_ = new WsServerImpl(81);
     ws_->onEvent([this](uint8_t num, WStype_t type, uint8_t* payload, size_t length) {
         onWsEvent(num, static_cast<uint8_t>(type), payload, length);
     });
@@ -219,20 +237,11 @@ void WsServer::sendWrappedJsonRaw(const char* type, const char* json, size_t len
         return;
     }
 
-    const size_t totalLen = static_cast<size_t>(prefixLen) + length + 1;
-    char* buf = static_cast<char*>(malloc(totalLen + 1));
-    if (!buf) {
-        HAL_LOG_WARN("WS", "Out of memory for raw %s wrapper (%u bytes)", type, static_cast<unsigned>(totalLen));
-        return;
-    }
-
-    memcpy(buf, prefix, static_cast<size_t>(prefixLen));
-    memcpy(buf + prefixLen, json, length);
-    buf[totalLen - 1] = '}';
-    buf[totalLen] = '\0';
-
-    ws_->sendTXT(connectedClient_, buf, totalLen);
-    free(buf);
+    // Отправляем тремя фрагментами без malloc большого буфера:
+    // 1) {"type":"...","data":   (fin=false)
+    // 2) <json>                  (fin=false)
+    // 3) }                       (fin=true)
+    ws_->sendFragmented(connectedClient_, prefix, static_cast<size_t>(prefixLen), json, length);
 }
 
 // =============================================================================

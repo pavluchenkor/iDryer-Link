@@ -17,7 +17,7 @@
 #include <uart/uart_bridge.h>
 #include <core/config.h>
 
-class WebSocketsServer;
+class WsServerImpl;
 
 class WsServer {
 public:
@@ -62,7 +62,7 @@ private:
     char deviceToken_[IDRYER_MAX_TOKEN_LEN]; // Device token для проверки auth
 
     // WebSocket
-    WebSocketsServer* ws_ = nullptr;
+    WsServerImpl* ws_ = nullptr;
     bool enabled_ = false;
     int8_t connectedClient_ = -1;
     bool clientAuthorized_ = false;

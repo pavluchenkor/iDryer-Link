@@ -16,6 +16,8 @@
 #include <sys/time.h>
 #include <ArduinoJson.h>
 #include <menu_commands.h>
+#include <menu_meta.h>
+#include <menu_ids.h>
 #include "version.h"
 
 // API URL по умолчанию
@@ -117,6 +119,17 @@ namespace idryer
         mqtt_.setCommandCallback([this](const char *cmd, JsonObjectConst data)
                                  { handleMqttCommand(cmd, data); });
 
+        // Настраиваем callback для команд из HA (select + number entities)
+        haPublisher_.setCommandCallback([this](const char *cmd, const char *unitId,
+                                               int temperature, int duration) {
+            StaticJsonDocument<128> doc;
+            doc["unitId"] = unitId;
+            JsonObject params = doc.createNestedObject("params");
+            params["temperature"] = temperature;
+            params["duration"] = duration;
+            handleMqttCommand(cmd, doc.as<JsonObjectConst>());
+        });
+
         // Настраиваем callback для синхронизации времени
         cmdHandler_.setTimeSyncCallback([](const char *ts, void *ctx)
                                         { static_cast<IdryerDevice *>(ctx)->syncTimeFromBackend(ts); }, this);
@@ -129,9 +142,6 @@ namespace idryer
 
         // Отправляем первый Hello Request к MCU
         sendHelloRequest();
-
-        // Попытка инициализации Home Assistant (опционально)
-        initHomeAssistant();
     }
 
     // =============================================================================
@@ -872,6 +882,12 @@ namespace idryer
             HAL_LOG_INFO("DEVICE", "Sent HelloAck with IP=%s", ipStr);
         }
 
+        // При подключении к облачному MQTT - инициализируем HA (Serial уже готов)
+        if (newState == cloud::CloudState::Online && !self->haEnabled_)
+        {
+            self->initHomeAssistant();
+        }
+
         // При подключении к MQTT - публикуем info если Hello уже был получен
         if (newState == cloud::CloudState::Online && self->lastHelloValid_)
         {
@@ -1018,7 +1034,12 @@ namespace idryer
 
         // Публикуем Discovery
         const char *serialNumber = cloud_.getIdentity().serialNumber;
-        if (haPublisher_.publishDiscovery(serialNumber, unitsCount_, hwVersion, fwVersion))
+        int tempMin     = (int)g_menu_meta[MENU_DRY_TEMP].min_val;
+        int tempMax     = (int)g_menu_meta[MENU_DRY_TEMP].max_val;
+        int durationMax = (int)g_menu_meta[MENU_DRY_TIME].max_val;
+
+        if (haPublisher_.publishDiscovery(serialNumber, unitsCount_, hwVersion, fwVersion,
+                                          tempMin, tempMax, durationMax))
         {
             HAL_LOG_INFO("HA", "✓ Discovery configuration published");
         }
