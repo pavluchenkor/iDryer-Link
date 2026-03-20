@@ -1,3 +1,19 @@
+"""
+Mock Backend для тестирования cloud flow iDryer LINK.
+
+Эмулирует HTTP API для provisioning/claiming.
+Socket.IO ивенты (device:command и др.) оставлены для совместимости, но
+в текущей архитектуре LINK использует MQTT, а не Socket.IO.
+
+Запуск:
+  pip install flask python-socketio eventlet
+  python mock_portal.py
+
+LINK должен быть собран с:
+  -DIDRYER_API_BASE="http://<IP>:5050/api"
+  -DMQTT_USE_TLS=0
+"""
+
 import eventlet
 eventlet.monkey_patch()
 import socketio
@@ -8,26 +24,69 @@ eventlet.hubs.use_hub("poll")
 sio = socketio.Server(async_mode="eventlet", cors_allowed_origins="*", logger=True, engineio_logger=True)
 flask_app = Flask(__name__)
 
+# Простое хранилище состояния в памяти
+_devices = {}  # token -> {serialNumber, pin, claimed, deviceId}
+
+
+@flask_app.post("/api/devices/provision")
+def provision_device():
+    """
+    POST /api/devices/provision
+    Body: {"serialNumber": "..."}
+    Response: {"deviceToken": "...", "isNew": true, "isClaimed": false}
+    """
+    payload = request.get_json(force=True) or {}
+    serial_number = payload.get("serialNumber", "UNKNOWN")
+    token = f"mock-token-{serial_number[-8:]}"
+    is_claimed = serial_number in [d.get("serialNumber") for d in _devices.values() if d.get("claimed")]
+    _devices[token] = {"serialNumber": serial_number, "claimed": is_claimed, "deviceId": None}
+    print(f"[MOCK] provision serial={serial_number} -> token={token} isClaimed={is_claimed}", flush=True)
+    return jsonify({
+        "deviceToken": token,
+        "isNew": True,
+        "isClaimed": is_claimed,
+    })
+
 
 @flask_app.post("/api/devices/register")
 def register_device():
-  payload = request.get_json(force=True) or {}
-  token = payload.get("token", "UNKNOWN")
-  serial = payload.get("serialNumber", "IDRYER-PRO-MOCK")
-  print(f"[MOCK] register token={token} serial={serial}", flush=True)
-  return jsonify({"pin": "123456"})
+    """
+    POST /api/devices/register
+    Body: {"token": "...", "serialNumber": "..."}
+    Response: {"pin": "12345678", "remainingSeconds": 300}
+           or {"alreadyClaimed": true, "deviceId": "..."}
+    """
+    payload = request.get_json(force=True) or {}
+    token = payload.get("token", "UNKNOWN")
+    serial = payload.get("serialNumber", "")
+    device = _devices.get(token)
+    if device and device.get("claimed"):
+        print(f"[MOCK] register token={token} -> alreadyClaimed", flush=True)
+        return jsonify({"alreadyClaimed": True, "deviceId": device["deviceId"]})
+    pin = "12345678"
+    if device:
+        device["pin"] = pin
+    print(f"[MOCK] register token={token} serial={serial} -> PIN={pin}", flush=True)
+    return jsonify({"pin": pin, "remainingSeconds": 300})
 
 
 @flask_app.get("/api/devices/check-claim/<token>")
 def check_claim(token):
-  print(f"[MOCK] claim check token={token}", flush=True)
-  return jsonify({
-      "claimed": True,
-      "device": {
-          "id": f"DEV-{token[-4:] or '0000'}",
-          "serialNumber": "IDRYER-PRO-MOCK"
-      }
-  })
+    """
+    GET /api/devices/check-claim/{token}
+    Response: {"claimed": true, "deviceId": "..."}
+           or {"claimed": false}
+    """
+    device = _devices.get(token)
+    if device and not device.get("claimed"):
+        # Автоматически подтверждаем claiming через 5 секунд после register
+        device["claimed"] = True
+        device["deviceId"] = f"mock-device-{token[-8:]}"
+    if device and device.get("claimed"):
+        print(f"[MOCK] check-claim token={token} -> CLAIMED deviceId={device['deviceId']}", flush=True)
+        return jsonify({"claimed": True, "deviceId": device["deviceId"]})
+    print(f"[MOCK] check-claim token={token} -> not claimed", flush=True)
+    return jsonify({"claimed": False})
 
 
 @flask_app.post("/api/emit-command")
