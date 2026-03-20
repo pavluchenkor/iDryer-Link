@@ -173,7 +173,10 @@ private:
     void syncTimeFromBackend(const char* timestamp);
 
     // Home Assistant
-    void initHomeAssistant();
+    void initHomeAssistant(const char* host = nullptr,
+                           const char* user = nullptr,
+                           const char* pass = nullptr);
+    void reconfigureHA(const char* host, const char* user, const char* pass);
     void publishHADiscovery();
 
     void handleMqttCommand(const char* command, JsonObjectConst data);

@@ -8,27 +8,27 @@
 
 ## Прошивка (`idryer-link`)
 
-- [ ] **NVS**: сохранять `ha_host`, `ha_user`, `ha_pass` (`src/main.cpp` / Preferences)
-- [ ] **`initHomeAssistant()`**: читать host из NVS, дефолт `homeassistant.local`  (`src/IdryerDevice.cpp`)
-- [ ] **Новая MQTT команда `configure_ha`**: принять `{host, user, pass}`, сохранить в NVS, переподключиться к HA (`lib/idryer-protocol/src/cloud/command_handler.cpp`)
+- [x] **NVS**: сохранять `ha_host`, `ha_user`, `ha_pass` (namespace `"ha"`, `src/IdryerDevice.cpp`)
+- [x] **`initHomeAssistant(host, user, pass)`**: читать из NVS при `CloudState::Online`, дефолт mDNS (`src/IdryerDevice.cpp`)
+- [x] **Новая MQTT команда `configure_ha`**: принять `{host, user, pass}`, сохранить в NVS, переподключиться к HA (`src/IdryerDevice.cpp::handleMqttCommand`)
 
 ---
 
 ## Backend (`iDryerPortal/backend`)
 
-- [ ] **Новый MQTT command**: публикация `configure_ha` на топик устройства (`src/devices/devices.service.ts`)
-- [ ] **Новый endpoint**: `POST /devices/:id/configure-ha` с `{host, user, pass}` (`src/devices/devices.controller.ts`)
+- [x] **Новый MQTT command**: публикация `configure_ha` на топик `idryer/${mqttKey}/commands/configure_ha` (`src/devices/devices.service.ts::configureHA`)
+- [x] **Новый endpoint**: `POST /devices/:id/configure-ha` с `{host, user, pass}` (`src/devices/devices.controller.ts`)
 
 ---
 
 ## Frontend (`iDryerPortal/frontend`)
 
-- [ ] **Шаг в `DeviceClaimDialog.tsx`**: после `device:activated` — опциональный шаг с формой
+- [x] **Шаг `'ha'` в `DeviceClaimDialog.tsx`**: после `device:activated` → "Завершить" → шаг HA
   Поля: Host (default: `homeassistant.local`), Username, Password
-  Кнопки: "Настроить" / "Пропустить"
+  Кнопки: "Пропустить" / "Настроить"
 
-- [ ] **Кнопка в `LinkModuleBlock` (`DeviceShow.tsx`)**: "Configure Home Assistant"
-  Открывает тот же диалог с формой (для повторной настройки)
+- [x] **Кнопка "Настроить Home Assistant" в `LinkModuleBlock` (`DeviceShow.tsx`)**
+  Открывает диалог с формой (host/user/pass) для повторной настройки
 
 ---
 

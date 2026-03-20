@@ -12,12 +12,12 @@ Link is a connectivity module for iDryer. It plugs into the controller's Etherne
 
 **Connect wires** to the ESP32-C3 Super Mini according to ![esp32superMini](./img/esp32superMini.png)
 
-**Depending on the type and manufacturer of the board, the location of the RX and TX pins may vary**. 
+**Depending on the type and manufacturer of the board, the location of the 6 and 7 pins may vary**. 
 Check the pinout provided by your board vendor.
 
 ```
-UART_RX_PIN 6
-UART_TX_PIN 7
+UART_RX_PIN 6 (white-blue)
+UART_TX_PIN 7 (white-green)
 ```
 
 **ESP32-C3 Super Mini pinout**

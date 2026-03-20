@@ -392,6 +392,8 @@ void loop()
             Serial.println("[BOOT] Logs enabled after WiFi config");
             Serial.println("========================================");
             HAL_LOG_INFO("CLOUD", "WiFi connected, logs enabled");
+            HAL_LOG_INFO("CLOUD", "WiFi connected, IP: %s, RSSI: %d dBm",
+                         WiFi.localIP().toString().c_str(), WiFi.RSSI());
         }
     }
     else
