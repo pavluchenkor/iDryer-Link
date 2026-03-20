@@ -15,6 +15,7 @@
 #include <time.h>
 #include <sys/time.h>
 #include <ArduinoJson.h>
+#include <Preferences.h>
 #include <menu_commands.h>
 #include <menu_meta.h>
 #include <menu_ids.h>
@@ -169,9 +170,9 @@ namespace idryer
         uart_->setConfigPushChunkHandler([this](const DryerUart::ConfigChunkPayload &p, uint8_t dataLen, const DryerUart::FrameHeader &h)
                                          { handleConfigPushChunk(p, dataLen, h); });
 
-        uart_->setHeartbeatHandler([](const DryerUart::HeartbeatPayload &p, const DryerUart::FrameHeader &h)
-                                   { HAL_LOG_DEBUG("UART", "Heartbeat: uptime=%d rssi=%d errors=%d",
-                                                   p.uptimeSeconds, p.wifiRssiDbm, p.errorsSinceBoot); });
+        uart_->setHeartbeatHandler([this](const DryerUart::HeartbeatPayload &p, const DryerUart::FrameHeader &h)
+                                   { HAL_LOG_DEBUG("UART", "Heartbeat: uptime=%d rssi=%d dBm errors=%d",
+                                                   p.uptimeSeconds, wifi_->getRSSI(), p.errorsSinceBoot); });
 
         uart_->setErrorHandler([this](const DryerUart::ErrorPayload &p, bool remote)
                                {
@@ -340,22 +341,16 @@ namespace idryer
             HAL_LOG_INFO("DEVICE", "HelloAck sent (IP=%s, SSID=%s)", ipStr, ack.ssid);
         }
 
-        // Переключаем MQTT топик на mcuSerial (RP2040 identity) если устройство уже привязано
-        // и серийник ещё не обновлён (первый boot после claming)
-        if (payload.mcuSerial[0] != '\0' && cloud_.getIdentity().hasDeviceId())
+        // Передаём mcuSerial в state machine — он является единственным ID устройства.
+        // При первом boot это запустит Provisioning, при повторных — просто подтверждение.
+        if (payload.mcuSerial[0] != '\0')
         {
-            if (strcmp(cloud_.getIdentity().serialNumber, payload.mcuSerial) != 0)
-            {
-                HAL_LOG_INFO("DEVICE", "Switching MQTT topic: %s -> %s (mcuSerial)",
-                             cloud_.getIdentity().serialNumber, payload.mcuSerial);
-                cloud_.switchSerialNumber(payload.mcuSerial);
-            }
+            cloud_.setMcuSerial(payload.mcuSerial);
         }
 
-        // Всегда публикуем info при получении Hello (если онлайн)
+        // Публикуем info если онлайн
         if (cloud_.isOnline())
         {
-            // Сбрасываем флаг чтобы info публиковался при каждом Hello
             publisher_.resetInfoPublished();
             publishDeviceInfo(payload);
         }
@@ -786,6 +781,28 @@ namespace idryer
 
     void IdryerDevice::handleMqttCommand(const char *command, JsonObjectConst data)
     {
+        if (strcmp(command, "configure_ha") == 0)
+        {
+            const char* host = data["host"] | "";
+            const char* user = data["user"] | "";
+            const char* pass = data["pass"] | "";
+
+            Preferences prefs;
+            prefs.begin("ha", false);
+            prefs.putString("host", host);
+            prefs.putString("user", user);
+            prefs.putString("pass", pass);
+            prefs.end();
+
+            HAL_LOG_INFO("HA", "configure_ha: host=%s user=%s", host, user);
+
+            reconfigureHA(
+                host[0] != '\0' ? host : nullptr,
+                user[0] != '\0' ? user : nullptr,
+                pass[0] != '\0' ? pass : nullptr);
+            return;
+        }
+
         // Делегируем в CommandHandler
         cmdHandler_.handleMqttCommand(command, data);
     }
@@ -885,7 +902,16 @@ namespace idryer
         // При подключении к облачному MQTT - инициализируем HA (Serial уже готов)
         if (newState == cloud::CloudState::Online && !self->haEnabled_)
         {
-            self->initHomeAssistant();
+            Preferences prefs;
+            prefs.begin("ha", true);
+            String host = prefs.getString("host", "");
+            String user = prefs.getString("user", "");
+            String pass = prefs.getString("pass", "");
+            prefs.end();
+            self->initHomeAssistant(
+                host.length() > 0 ? host.c_str() : nullptr,
+                user.length() > 0 ? user.c_str() : nullptr,
+                pass.length() > 0 ? pass.c_str() : nullptr);
         }
 
         // При подключении к MQTT - публикуем info если Hello уже был получен
@@ -941,19 +967,8 @@ namespace idryer
             self->uart_->sendClaimComplete(payload);
         }
 
-        // Если mcuSerial уже известен (Hello от RP2040 пришёл до claiming) —
-        // переключаем MQTT топик на mcuSerial прямо сейчас, чтобы первое
-        // подключение к MQTT было уже на правильном топике
-        if (self->lastHelloValid_ && self->lastHello_.mcuSerial[0] != '\0')
-        {
-            const char *currentSerial = self->cloud_.getIdentity().serialNumber;
-            if (strcmp(currentSerial, self->lastHello_.mcuSerial) != 0)
-            {
-                HAL_LOG_INFO("DEVICE", "Switching MQTT topic after claim: %s -> %s",
-                             currentSerial, self->lastHello_.mcuSerial);
-                self->cloud_.switchSerialNumber(self->lastHello_.mcuSerial);
-            }
-        }
+        // serialNumber уже установлен как mcuSerial при получении Hello (setMcuSerial),
+        // поэтому переключение топика здесь не требуется.
     }
 
     void IdryerDevice::onUnclaimed(void *ctx)
@@ -979,24 +994,20 @@ namespace idryer
     // HOME ASSISTANT ИНТЕГРАЦИЯ
     // =============================================================================
 
-    void IdryerDevice::initHomeAssistant()
+    void IdryerDevice::initHomeAssistant(const char* host, const char* user, const char* pass)
     {
         HAL_LOG_INFO("HA", "Initializing Home Assistant integration...");
 
-        // Ждем пока WiFi подключится (через cloud state machine)
-        // Попробуем найти HA через mDNS
-        if (haMqtt_.discover())
+        if (haMqtt_.discover(host))
         {
             HAL_LOG_INFO("HA", "✓ Home Assistant discovered!");
 
-            // Подключаемся к MQTT брокеру
             const char *serialNumber = cloud_.getIdentity().serialNumber;
-            if (haMqtt_.connect(serialNumber))
+            if (haMqtt_.connect(serialNumber, user, pass))
             {
                 haEnabled_ = true;
                 HAL_LOG_INFO("HA", "✓ Connected to Home Assistant MQTT");
 
-                // Публикуем Discovery конфигурацию
                 if (helloReceived_ && lastHelloValid_)
                 {
                     publishHADiscovery();
@@ -1009,9 +1020,16 @@ namespace idryer
         }
         else
         {
-            HAL_LOG_INFO("HA", "Home Assistant not found in network (homeassistant.local)");
+            HAL_LOG_INFO("HA", "Home Assistant not found in network");
             HAL_LOG_INFO("HA", "Device will work in cloud-only mode");
         }
+    }
+
+    void IdryerDevice::reconfigureHA(const char* host, const char* user, const char* pass)
+    {
+        haEnabled_ = false;
+        haPublisher_.resetDiscoveryPublished();
+        initHomeAssistant(host, user, pass);
     }
 
     void IdryerDevice::publishHADiscovery()
