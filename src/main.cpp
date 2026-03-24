@@ -371,6 +371,21 @@ void setup()
 
     // Callback для получения PIN (WebSerial claiming)
     device.setClaimPinCallback(onWebClaimPin);
+
+    // Авто-refresh deviceToken при WS invalid_token:
+    // ESP32 делает re-provision на портал и получает актуальный токен.
+    // Приложение параллельно делает retry через ~2-3 сек — к тому времени токен обновлён.
+    wsServer.setTokenRefreshCallback([&]() {
+        auto* csm = device.getCloudStateMachine();
+        if (!csm) return;
+        HAL_LOG_INFO("DEVICE", "WS auth fail → auto-refreshing token from portal...");
+        if (csm->refreshToken()) {
+            wsServer.updateToken(csm->getIdentity().token);
+            HAL_LOG_INFO("DEVICE", "WS token auto-refreshed OK");
+        } else {
+            HAL_LOG_WARN("DEVICE", "WS token refresh failed (no WiFi, no serial, or cooldown)");
+        }
+    });
 }
 
 void loop()

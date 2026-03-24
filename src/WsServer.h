@@ -25,6 +25,14 @@ public:
     ~WsServer();
 
     /**
+     * @brief Ранняя инициализация mDNS с именем устройства без запуска WS-сервера.
+     * Вызывать сразу как только serial number стал известен (до WsEnable от RP2040),
+     * чтобы приложение могло найти устройство по _idryer._tcp.
+     * @param deviceName Serial number устройства
+     */
+    void initMdns(const char* deviceName);
+
+    /**
      * @brief Запуск WS сервера + mDNS
      * @param deviceName Имя устройства (serial number, например "DEVICE_4AF988_3847291")
      * @param deviceToken Device token из портала (хранится в NVS, известен приложению)
@@ -38,6 +46,7 @@ public:
     void loop();
 
     bool isEnabled() const { return enabled_; }
+    bool isListening() const;
     bool isClientConnected() const { return connectedClient_ >= 0 && clientAuthorized_; }
 
     // Публикация данных (вызывается из IdryerDevice)
@@ -56,6 +65,13 @@ public:
     /** @brief Callback для входящих команд от WS клиента */
     using CommandCallback = std::function<void(const char* command, JsonObjectConst data)>;
     void setCommandCallback(CommandCallback cb) { cmdCallback_ = cb; }
+
+    /** @brief Обновить deviceToken (после auto-refresh с портала) */
+    void updateToken(const char* newToken);
+
+    /** @brief Callback при invalid_token — вызывается из loop() для re-provision */
+    using TokenRefreshCallback = std::function<void()>;
+    void setTokenRefreshCallback(TokenRefreshCallback cb) { tokenRefreshCb_ = cb; }
 
 private:
     char deviceName_[40];                    // "DEVICE_XXXXXX_XXXXXXX"
@@ -82,5 +98,7 @@ private:
     static const char* rfidEventToString(DryerUart::RfidEvent event);
 
     CommandCallback cmdCallback_;
+    TokenRefreshCallback tokenRefreshCb_;
+    bool needsTokenRefresh_ = false;
     DryerUart::UartBridge* uart_;
 };

@@ -8,9 +8,13 @@
 
 #if defined(ESP32) || defined(ESP_PLATFORM)
 
+#define WS_Y "\033[33m"   // yellow
+#define WS_R "\033[0m"    // reset
+
 #include "WsServer.h"
 #include <WebSocketsServer.h>
 #include <ESPmDNS.h>
+#include <WiFi.h>
 #include <hal/hal_types.h>
 
 // Подкласс для доступа к protected-методам фрагментированной отправки
@@ -51,9 +55,42 @@ WsServer::~WsServer()
 // LIFECYCLE
 // =============================================================================
 
+void WsServer::initMdns(const char* deviceName)
+{
+    if (!deviceName || deviceName[0] == '\0') {
+        HAL_LOG_WARN("WS", "initMdns: deviceName empty, skipping");
+        return;
+    }
+
+    strncpy(deviceName_, deviceName, sizeof(deviceName_) - 1);
+    deviceName_[sizeof(deviceName_) - 1] = '\0';
+
+    const bool mdnsOk = MDNS.begin(deviceName_);
+    HAL_LOG_INFO("WS", WS_Y "initMdns: MDNS.begin(%s) -> %s" WS_R, deviceName_, mdnsOk ? "ok" : "fail");
+
+    if (mdnsOk) {
+        MDNS.addService("_idryer", "_tcp", 81);
+        HAL_LOG_INFO("WS", WS_Y "initMdns: _idryer._tcp:81 advertised (WS not yet started)" WS_R);
+    }
+}
+
 void WsServer::begin(const char* deviceName, const char* deviceToken)
 {
-    if (enabled_) return;
+    const bool wifiConnected = WiFi.status() == WL_CONNECTED;
+    const String ip = wifiConnected ? WiFi.localIP().toString() : String("-");
+
+    HAL_LOG_INFO("WS", "begin requested: enabled=%d wifi=%d ip=%s name=%s token=%s",
+                 enabled_,
+                 wifiConnected,
+                 ip.c_str(),
+                 (deviceName && deviceName[0] != '\0') ? deviceName : "(empty)",
+                 (deviceToken && deviceToken[0] != '\0') ? "yes" : "no");
+
+    if (enabled_) {
+        HAL_LOG_WARN("WS", "begin skipped: already enabled client=%d authorized=%d",
+                     connectedClient_, clientAuthorized_);
+        return;
+    }
 
     strncpy(deviceName_, deviceName, sizeof(deviceName_) - 1);
     deviceName_[sizeof(deviceName_) - 1] = '\0';
@@ -67,19 +104,30 @@ void WsServer::begin(const char* deviceName, const char* deviceToken)
         onWsEvent(num, static_cast<uint8_t>(type), payload, length);
     });
     ws_->begin();
+    HAL_LOG_INFO("WS", "WebSocket listener started on port 81");
 
     // mDNS — имя = serial number устройства
-    MDNS.begin(deviceName_);
-    MDNS.addService("_idryer", "_tcp", 81);
+    const bool mdnsOk = MDNS.begin(deviceName_);
+    HAL_LOG_INFO("WS", "MDNS.begin(%s) -> %s", deviceName_, mdnsOk ? "ok" : "fail");
+
+    bool serviceOk = false;
+    if (mdnsOk) {
+        serviceOk = MDNS.addService("_idryer", "_tcp", 81);
+        HAL_LOG_INFO("WS", "MDNS.addService(_idryer,_tcp,81) -> %s", serviceOk ? "ok" : "fail");
+    } else {
+        HAL_LOG_WARN("WS", "mDNS responder not started; _idryer._tcp will not be advertised");
+    }
 
     enabled_ = true;
 
-    HAL_LOG_INFO("WS", "Server started: %s.local:81", deviceName_);
+    HAL_LOG_INFO("WS", "Server started: %s.local:81 advertised=%d", deviceName_, serviceOk);
 }
 
 void WsServer::stop()
 {
     if (!enabled_) return;
+
+    HAL_LOG_INFO("WS", "stop requested: client=%d authorized=%d", connectedClient_, clientAuthorized_);
 
     if (ws_) {
         ws_->close();
@@ -88,6 +136,7 @@ void WsServer::stop()
     }
 
     MDNS.end();
+    HAL_LOG_INFO("WS", "MDNS.end() called");
 
     enabled_ = false;
     connectedClient_ = -1;
@@ -100,6 +149,17 @@ void WsServer::loop()
 {
     if (!enabled_ || !ws_) return;
     ws_->loop();
+
+    // Отложенный авто-refresh токена (запускается после invalid_token)
+    if (needsTokenRefresh_ && tokenRefreshCb_) {
+        needsTokenRefresh_ = false;
+        tokenRefreshCb_();
+    }
+}
+
+bool WsServer::isListening() const
+{
+    return enabled_ && ws_ != nullptr;
 }
 
 // =============================================================================
@@ -112,19 +172,21 @@ void WsServer::onWsEvent(uint8_t num, uint8_t type, uint8_t* payload, size_t len
 
     switch (wsType) {
     case WStype_CONNECTED:
-        HAL_LOG_INFO("WS", "Client #%d connected", num);
-        // Допускаем только одного клиента
+        HAL_LOG_INFO("WS", WS_Y ">>> CONNECTED #%d from %s (active=%d authorized=%d)" WS_R,
+                     num, ws_->remoteIP(num).toString().c_str(),
+                     connectedClient_, clientAuthorized_);
         if (connectedClient_ >= 0 && connectedClient_ != num) {
-            HAL_LOG_WARN("WS", "Rejecting client #%d, already have #%d", num, connectedClient_);
+            HAL_LOG_WARN("WS", WS_Y "Rejecting #%d, already have #%d" WS_R, num, connectedClient_);
             ws_->disconnect(num);
             return;
         }
         connectedClient_ = num;
         clientAuthorized_ = false;
+        HAL_LOG_INFO("WS", WS_Y "Waiting for auth from #%d" WS_R, num);
         break;
 
     case WStype_DISCONNECTED:
-        HAL_LOG_INFO("WS", "Client #%d disconnected", num);
+        HAL_LOG_INFO("WS", WS_Y "<<< DISCONNECTED #%d (was authorized=%d)" WS_R, num, clientAuthorized_);
         if (connectedClient_ == num) {
             connectedClient_ = -1;
             clientAuthorized_ = false;
@@ -132,19 +194,39 @@ void WsServer::onWsEvent(uint8_t num, uint8_t type, uint8_t* payload, size_t len
         break;
 
     case WStype_TEXT:
+        HAL_LOG_INFO("WS", WS_Y "RX #%d (%u bytes): %.*s" WS_R,
+                     num, static_cast<unsigned>(length),
+                     static_cast<int>(length < 256 ? length : 256),
+                     reinterpret_cast<const char*>(payload));
         if (num == connectedClient_) {
             handleWsMessage(num, reinterpret_cast<const char*>(payload), length);
+        } else {
+            HAL_LOG_WARN("WS", WS_Y "RX from unknown #%d (active=%d), ignoring" WS_R, num, connectedClient_);
         }
         break;
 
+    case WStype_ERROR:
+        HAL_LOG_WARN("WS", WS_Y "Error on client #%d" WS_R, num);
+        break;
+
     default:
+        HAL_LOG_DEBUG("WS", "Event type=%d client=%d length=%u",
+                      static_cast<int>(wsType), num, static_cast<unsigned>(length));
         break;
     }
 }
 
 void WsServer::handleWsMessage(uint8_t num, const char* json, size_t length)
 {
-    StaticJsonDocument<1024> doc;
+    HAL_LOG_DEBUG("WS", "rx: client=%d length=%u authorized=%d payload=%.*s",
+                  num,
+                  static_cast<unsigned>(length),
+                  clientAuthorized_,
+                  static_cast<int>(length),
+                  json);
+
+    static StaticJsonDocument<1024> doc;
+    doc.clear();
     DeserializationError err = deserializeJson(doc, json, length);
     if (err) {
         HAL_LOG_WARN("WS", "JSON parse error: %s", err.c_str());
@@ -152,10 +234,15 @@ void WsServer::handleWsMessage(uint8_t num, const char* json, size_t length)
     }
 
     const char* type = doc["type"] | "";
+    HAL_LOG_DEBUG("WS", "parsed message type=%s", type);
 
     // Auth — должен быть первым сообщением
     if (strcmp(type, "auth") == 0) {
         const char* token = doc["token"] | "";
+        HAL_LOG_INFO("WS", WS_Y "Auth attempt: rx=%.8s... expected=%.8s... match=%d" WS_R,
+                     token[0] != '\0' ? token : "(empty)",
+                     deviceToken_[0] != '\0' ? deviceToken_ : "(empty)",
+                     (deviceToken_[0] != '\0' && strcmp(token, deviceToken_) == 0) ? 1 : 0);
 
         if (deviceToken_[0] != '\0' && strcmp(token, deviceToken_) == 0) {
             clientAuthorized_ = true;
@@ -165,7 +252,15 @@ void WsServer::handleWsMessage(uint8_t num, const char* json, size_t length)
             resp["deviceName"] = deviceName_;
             sendJson(nullptr, resp);
 
-            HAL_LOG_INFO("WS", "Client authorized");
+            HAL_LOG_INFO("WS", WS_Y "AUTH OK — client #%d authorized" WS_R, num);
+
+            // Запрашиваем актуальный конфиг у RP2040 сразу после авторизации,
+            // чтобы WS-клиент получил свежий full-конфиг с правильным языком.
+            if (cmdCallback_) {
+                StaticJsonDocument<1> emptyDoc;
+                cmdCallback_("get_config", emptyDoc.as<JsonObjectConst>());
+                HAL_LOG_INFO("WS", WS_Y "Auto get_config triggered after auth_ok" WS_R);
+            }
         } else {
             StaticJsonDocument<64> resp;
             resp["type"] = "auth_fail";
@@ -173,6 +268,7 @@ void WsServer::handleWsMessage(uint8_t num, const char* json, size_t length)
             sendJson(nullptr, resp);
 
             HAL_LOG_WARN("WS", "Client auth failed: invalid token");
+            needsTokenRefresh_ = true;
         }
         return;
     }
@@ -212,16 +308,21 @@ void WsServer::sendJson(const char* type, JsonDocument& doc)
     // Если type задан — это обёртка {"type": ..., "data": ...}
     // Если type == nullptr — отправляем doc как есть (для auth ответов)
     if (type) {
-        StaticJsonDocument<2048> wrapper;
+        static StaticJsonDocument<2048> wrapper;
+        static char buf[2048];
+        wrapper.clear();
         wrapper["type"] = type;
         wrapper["data"] = doc.as<JsonObject>();
 
-        char buf[2048];
         size_t len = serializeJson(wrapper, buf, sizeof(buf));
+        HAL_LOG_INFO("WS", WS_Y "TX #%d type=%s (%u bytes)" WS_R, connectedClient_, type, static_cast<unsigned>(len));
         ws_->sendTXT(connectedClient_, buf, len);
     } else {
-        char buf[256];
+        static char buf[256];
         size_t len = serializeJson(doc, buf, sizeof(buf));
+        HAL_LOG_INFO("WS", WS_Y "TX #%d (%u bytes): %.*s" WS_R,
+                     connectedClient_, static_cast<unsigned>(len),
+                     static_cast<int>(len), buf);
         ws_->sendTXT(connectedClient_, buf, len);
     }
 }
@@ -416,6 +517,13 @@ DryerUart::WsStatusPayload WsServer::getStatus() const
     status.pairedCount = clientAuthorized_ ? 1 : 0;
     status.maxClients = 1;
 
+    HAL_LOG_DEBUG("WS", "getStatus -> state=%u enabled=%d client=%d authorized=%d paired=%u",
+                  static_cast<unsigned>(status.state),
+                  enabled_ ? 1 : 0,
+                  connectedClient_,
+                  clientAuthorized_ ? 1 : 0,
+                  static_cast<unsigned>(status.pairedCount));
+
     return status;
 }
 
@@ -452,6 +560,14 @@ const char* WsServer::rfidEventToString(DryerUart::RfidEvent event)
     case DryerUart::RfidEvent::TagRemoved:  return "tag_removed";
     default:                                 return "unknown";
     }
+}
+
+void WsServer::updateToken(const char* newToken)
+{
+    if (!newToken || newToken[0] == '\0') return;
+    strncpy(deviceToken_, newToken, sizeof(deviceToken_) - 1);
+    deviceToken_[sizeof(deviceToken_) - 1] = '\0';
+    HAL_LOG_INFO("WS", WS_Y "Token auto-updated from portal" WS_R);
 }
 
 #endif // ESP32 || ESP_PLATFORM

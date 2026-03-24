@@ -204,28 +204,53 @@ namespace idryer
         // WebSocket Local Access обработчики
         uart_->setWsEnableHandler([this](const DryerUart::WsEnablePayload &p, const DryerUart::FrameHeader &h)
                                   {
-            HAL_LOG_INFO("UART", "WsEnable: enable=%d", p.enable);
+            char ipStr[16];
+            wifi_->getLocalIP(ipStr, sizeof(ipStr));
+            const auto &identity = cloud_.getIdentity();
+            HAL_LOG_INFO("UART", "WsEnable: seq=%u enable=%d wsServer=%s wifiConnected=%d ip=%s serial=%s token=%s",
+                         h.sequence,
+                         p.enable,
+                         wsServer_ ? "yes" : "no",
+                         wifi_->isConnected() ? 1 : 0,
+                         ipStr[0] != '\0' ? ipStr : "-",
+                         identity.serialNumber[0] != '\0' ? identity.serialNumber : "-",
+                         identity.token[0] != '\0' ? "yes" : "no");
             if (wsServer_) {
                 if (p.enable) {
+                    HAL_LOG_INFO("UART", "WsEnable: calling wsServer->begin()");
                     wsServer_->begin(cloud_.getIdentity().serialNumber,
                                      cloud_.getIdentity().token);
                 } else {
+                    HAL_LOG_INFO("UART", "WsEnable: calling wsServer->stop()");
                     wsServer_->stop();
                 }
-                uart_->sendWsStatus(wsServer_->getStatus());
+                const auto status = wsServer_->getStatus();
+                HAL_LOG_INFO("UART", "WsEnable: status after action state=%u paired=%u max=%u",
+                             static_cast<unsigned>(status.state),
+                             static_cast<unsigned>(status.pairedCount),
+                             static_cast<unsigned>(status.maxClients));
+                uart_->sendWsStatus(status);
+            } else {
+                HAL_LOG_WARN("UART", "WsEnable dropped: wsServer is null");
             } });
 
         uart_->setWsStatusRequestHandler([this](const DryerUart::FrameHeader &h)
                                          {
-            HAL_LOG_INFO("UART", "WsStatusRequest");
+            HAL_LOG_INFO("UART", "WsStatusRequest: seq=%u wsServer=%s", h.sequence, wsServer_ ? "yes" : "no");
             if (wsServer_) {
-                uart_->sendWsStatus(wsServer_->getStatus());
+                const auto status = wsServer_->getStatus();
+                HAL_LOG_INFO("UART", "WsStatusRequest: reply state=%u paired=%u max=%u",
+                             static_cast<unsigned>(status.state),
+                             static_cast<unsigned>(status.pairedCount),
+                             static_cast<unsigned>(status.maxClients));
+                uart_->sendWsStatus(status);
             } else {
                 // WS не инициализирован — отправляем Disabled
                 DryerUart::WsStatusPayload status{};
                 status.state = DryerUart::WsState::Disabled;
                 status.pairedCount = 0;
                 status.maxClients = 1;
+                HAL_LOG_WARN("UART", "WsStatusRequest: wsServer is null, replying Disabled");
                 uart_->sendWsStatus(status);
             } });
 
@@ -997,6 +1022,22 @@ namespace idryer
     void IdryerDevice::initHomeAssistant(const char* host, const char* user, const char* pass)
     {
         HAL_LOG_INFO("HA", "Initializing Home Assistant integration...");
+        HAL_LOG_INFO("HA", "Init context: wsServer=%s wsEnabled=%d wifiConnected=%d host=%s",
+                     wsServer_ ? "yes" : "no",
+                     wsServer_ ? wsServer_->isEnabled() : 0,
+                     wifi_ ? wifi_->isConnected() : 0,
+                     (host && host[0] != '\0') ? host : "(auto)");
+
+        // Ранняя инициализация mDNS с serial-именем — до WsEnable от RP2040.
+        // Serial уже доступен из NVS (cloud identity). Это позволяет приложению
+        // найти устройство по _idryer._tcp сразу после подключения к WiFi,
+        // даже если WsServer ещё не стартовал.
+        if (wsServer_ && !wsServer_->isEnabled()) {
+            const char* serial = cloud_.getIdentity().serialNumber;
+            if (serial && serial[0] != '\0') {
+                wsServer_->initMdns(serial);
+            }
+        }
 
         if (haMqtt_.discover(host))
         {
