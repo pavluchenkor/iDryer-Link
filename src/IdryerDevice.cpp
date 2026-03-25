@@ -135,6 +135,9 @@ namespace idryer
         cmdHandler_.setTimeSyncCallback([](const char *ts, void *ctx)
                                         { static_cast<IdryerDevice *>(ctx)->syncTimeFromBackend(ts); }, this);
 
+        // UART присутствует → двухмодульная конфигурация → ждём Hello для верификации serial
+        cloud_.setWaitForMcuSerial(uart_ != nullptr);
+
         // Инициализируем облачную машину состояний
         cloud_.begin();
 
@@ -858,6 +861,25 @@ namespace idryer
         }
     }
 
+    static DryerUart::LinkCloudState mapCloudState(cloud::CloudState s)
+    {
+        using CS = cloud::CloudState;
+        using LS = DryerUart::LinkCloudState;
+        switch (s)
+        {
+        case CS::Idle:               return LS::Idle;
+        case CS::WifiConnecting:
+        case CS::WaitingForMcuSerial:return LS::WifiConnecting;
+        case CS::Provisioning:       return LS::Provisioning;
+        case CS::Registering:        return LS::Registering;
+        case CS::AwaitingClaim:      return LS::AwaitingClaim;
+        case CS::Ready:              return LS::Ready;
+        case CS::MqttConnecting:     return LS::MqttConnecting;
+        case CS::Online:             return LS::Online;
+        default:                     return LS::Idle;
+        }
+    }
+
     void IdryerDevice::processHeartbeat()
     {
         uint32_t now = HAL_MILLIS();
@@ -870,7 +892,7 @@ namespace idryer
         payload.uptimeSeconds = now / 1000;
         payload.wifiRssiDbm = wifi_->getRSSI();
         payload.errorsSinceBoot = heartbeatErrors_;
-        payload.cloudState = static_cast<uint8_t>(cloud_.getState());
+        payload.cloudState = static_cast<uint8_t>(mapCloudState(cloud_.getState()));
         uart_->sendHeartbeat(payload);
 
         lastHeartbeatAt_ = now;
