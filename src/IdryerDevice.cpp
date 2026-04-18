@@ -107,8 +107,11 @@ namespace idryer
     {
         HAL_LOG_INFO("DEVICE", "Initializing...");
 
-        // Регистрируем UART обработчики
-        registerUartHandlers();
+        // Регистрируем UART обработчики (только при наличии UART)
+        if (uart_)
+        {
+            registerUartHandlers();
+        }
 
         // Настраиваем callbacks для CloudStateMachine
         cloud_.setStateChangeCallback(onCloudStateChange, this);
@@ -144,8 +147,11 @@ namespace idryer
         HAL_LOG_INFO("DEVICE", "Initialized, serial=%s",
                      cloud_.getIdentity().serialNumber);
 
-        // Отправляем первый Hello Request к MCU
-        sendHelloRequest();
+        // Отправляем первый Hello Request к MCU (если UART есть)
+        if (uart_)
+        {
+            sendHelloRequest();
+        }
     }
 
     // =============================================================================
@@ -174,8 +180,10 @@ namespace idryer
                                          { handleConfigPushChunk(p, dataLen, h); });
 
         uart_->setHeartbeatHandler([this](const DryerUart::HeartbeatPayload &p, const DryerUart::FrameHeader &h)
-                                   { HAL_LOG_DEBUG("UART", "Heartbeat: uptime=%d rssi=%d dBm errors=%d",
-                                                   p.uptimeSeconds, wifi_->getRSSI(), p.errorsSinceBoot); });
+                                   { HAL_LOG_DEBUG("UART", "Heartbeat rx: uptime=%lu int16_field=%d errorsSinceBoot=%u",
+                                                   static_cast<unsigned long>(p.uptimeSeconds),
+                                                   static_cast<int>(p.wifiRssiDbm),
+                                                   static_cast<unsigned>(p.errorsSinceBoot)); });
 
         uart_->setErrorHandler([this](const DryerUart::ErrorPayload &p, bool remote)
                                {
@@ -198,6 +206,9 @@ namespace idryer
 
         uart_->setRfidHandler([this](const DryerUart::RfidPayload &p, const DryerUart::FrameHeader &h)
                               { handleRfidEvent(p, h); });
+
+        uart_->setRfidDataHandler([this](const DryerUart::RfidDataPayload &p, const DryerUart::FrameHeader &h)
+                                  { handleRfidDataEvent(p, h); });
 
         uart_->setClaimStartHandler([this](const DryerUart::FrameHeader &h)
                                     {
@@ -267,7 +278,8 @@ namespace idryer
     void IdryerDevice::loop()
     {
         // Обрабатываем UART (входящие данные, retry)
-        uart_->loop();
+        if (uart_)
+            uart_->loop();
 
         // Обрабатываем облачную машину состояний
         cloud_.loop();
@@ -283,8 +295,8 @@ namespace idryer
         // Heartbeat каждые 5 секунд
         processHeartbeat();
 
-        // Hello Request retry логика
-        if (!helloReceived_)
+        // Hello Request retry логика (только с UART)
+        if (uart_ && !helloReceived_)
         {
             uint32_t now = HAL_MILLIS();
             if (now - lastHelloRequestMs_ >= DryerUart::HELLO_REQUEST_INTERVAL_MS)
@@ -307,7 +319,7 @@ namespace idryer
         }
 
         // Публикуем закэшированные данные если онлайн
-        if (cloud_.isOnline() && helloReceived_)
+        if (cloud_.isOnline() && (helloReceived_ || !uart_))
         {
             publishCachedData();
         }
@@ -404,15 +416,16 @@ namespace idryer
                  payload.firmwareVersion & 0xFF);
 
         publisher_.publishInfo(unitsCount_, payload.units, hwVersion, fwVersion,
-                               payload.workTimeCounter, payload.mcuSerial);
+                               payload.workTimeCounter, payload.mcuSerial,
+                               payload.deviceType);
 
         // WS параллельная публикация info
         if (wsServer_)
             wsServer_->sendInfo(unitsCount_, payload.units, hwVersion, fwVersion,
                                 payload.workTimeCounter, payload.mcuSerial);
 
-        HAL_LOG_INFO("DEVICE", "Published info: units=%d hw=%s fw=%s",
-                     unitsCount_, hwVersion, fwVersion);
+        HAL_LOG_INFO("DEVICE", "Published info: units=%d hw=%s fw=%s deviceType=%u",
+                     unitsCount_, hwVersion, fwVersion, (unsigned)payload.deviceType);
     }
 
     void IdryerDevice::handleTelemetry(const DryerUart::TelemetryPayload &payload,
@@ -510,6 +523,37 @@ namespace idryer
         // WS параллельная публикация
         if (wsServer_)
             wsServer_->sendRfid(payload);
+    }
+
+    void IdryerDevice::handleRfidDataEvent(const DryerUart::RfidDataPayload &payload,
+                                           const DryerUart::FrameHeader &header)
+    {
+        // Сохраняем мета из первого фрагмента
+        if (rfidDataFragCount_ == 0)
+            rfidDataMeta_ = payload;
+
+        // Копируем фрагмент в буфер
+        size_t offset  = (size_t)rfidDataFragCount_ * RFID_FRAG_SIZE;
+        size_t copyLen = RFID_DATA_SIZE - offset;
+        if (copyLen > RFID_FRAG_SIZE) copyLen = RFID_FRAG_SIZE;
+
+        if (offset < RFID_DATA_SIZE)
+            memcpy(rfidDataBuf_ + offset, payload.fragment, copyLen);
+
+        rfidDataFragCount_++;
+
+        bool isLast = (header.flags & DryerUart::FLAG_LAST_FRAGMENT) != 0;
+        if (isLast) {
+            HAL_LOG_INFO("DEVICE", "RFID data assembled: %u frags reader=%u",
+                         rfidDataFragCount_, rfidDataMeta_.readerId);
+
+            if (cloud_.isOnline() && helloReceived_)
+                publisher_.publishRfidData(rfidDataBuf_, RFID_DATA_SIZE, rfidDataMeta_);
+
+            // Сброс буфера
+            rfidDataFragCount_ = 0;
+            memset(rfidDataBuf_, 0, sizeof(rfidDataBuf_));
+        }
     }
 
     void IdryerDevice::handleCommandAck(const DryerUart::AckPayload &payload,
@@ -882,6 +926,9 @@ namespace idryer
 
     void IdryerDevice::processHeartbeat()
     {
+        if (!uart_)
+            return;
+
         uint32_t now = HAL_MILLIS();
         if (now - lastHeartbeatAt_ < DryerUart::HEARTBEAT_INTERVAL_MS)
         {
@@ -900,13 +947,14 @@ namespace idryer
 
     void IdryerDevice::sendHelloRequest()
     {
-        // Формируем Hello с role=HelloRequest (0xFF)
+        if (!uart_)
+            return;
+
         DryerUart::HelloPayload payload{};
         payload.role = DryerUart::Role::HelloRequest;
         payload.firmwareVersion = VERSION_NUMBER;
-        // Остальные поля нулевые — MCU их игнорирует
 
-        uart_->sendHello(payload, false); // ACK не требуется
+        uart_->sendHello(payload, false);
 
         lastHelloRequestMs_ = HAL_MILLIS();
         helloRequestAttempts_++;
@@ -930,16 +978,14 @@ namespace idryer
                      cloud::cloudStateToString(newState));
 
         // При готовности WiFi (Ready) отправляем HelloAck с IP и SSID
-        if (newState == cloud::CloudState::Ready && self->helloReceived_)
+        if (newState == cloud::CloudState::Ready && self->helloReceived_ && self->uart_)
         {
             DryerUart::HelloAckPayload ack{};
 
-            // Получаем IP и конвертируем в uint32_t
             char ipStr[16];
             self->wifi_->getLocalIP(ipStr, sizeof(ipStr));
             ack.ipAddress = parseIpAddress(ipStr);
 
-            // Получаем SSID
             self->wifi_->getSSID(ack.ssid, sizeof(ack.ssid));
 
             self->uart_->sendHelloAck(ack);

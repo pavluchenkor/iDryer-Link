@@ -68,6 +68,9 @@ public:
     void handleRfidEvent(const DryerUart::RfidPayload& payload,
                          const DryerUart::FrameHeader& header);
 
+    void handleRfidDataEvent(const DryerUart::RfidDataPayload& payload,
+                             const DryerUart::FrameHeader& header);
+
     void handleCommandAck(const DryerUart::AckPayload& payload,
                           const DryerUart::FrameHeader& header);
 
@@ -145,6 +148,13 @@ private:
     static constexpr uint8_t MAX_RFID_READERS = 4;
     DryerUart::RfidPayload latestRfid_[MAX_RFID_READERS]{};
     bool rfidDirty_[MAX_RFID_READERS] = {false};
+
+    // Сборка фрагментов RfidReadData (0x1A): 6 × 163 = 888 байт.
+    static constexpr size_t  RFID_DATA_SIZE  = 888;
+    static constexpr uint8_t RFID_FRAG_SIZE  = 163;
+    uint8_t  rfidDataBuf_[RFID_DATA_SIZE] = {};
+    uint8_t  rfidDataFragCount_ = 0;
+    DryerUart::RfidDataPayload rfidDataMeta_{}; // readerId/unitId/tag из первого фрагмента
 
     // Сборка фрагментов ConfigPush от MCU.
     DryerUart::ConfigReceiver configReceiver_;
