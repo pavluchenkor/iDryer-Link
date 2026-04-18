@@ -317,15 +317,8 @@ namespace
 void setup()
 {
     Serial.begin(115200);
-    // while (!Serial)
-    // {
-    //     delay(10);
-    // }
-    // delay(500);
 
-    // При старте Improv использует Serial — HAL логи отключены
     initArduinoHal(nullptr);
-
     // Отключаем JTAG для использования GPIO6/7
     gpio_reset_pin((gpio_num_t)UART_RX_PIN);
     gpio_reset_pin((gpio_num_t)UART_TX_PIN);
@@ -354,6 +347,14 @@ void setup()
         wifiManager.begin(savedSSID.c_str(), savedPassword.c_str());
         wifiConfigured = true;
     }
+#if defined(IDRYER_WIFI_SSID) && defined(IDRYER_WIFI_PASSWORD)
+    else
+    {
+        wifiManager.begin(IDRYER_WIFI_SSID, IDRYER_WIFI_PASSWORD);
+        saveWiFiCredentials(IDRYER_WIFI_SSID, IDRYER_WIFI_PASSWORD);
+        wifiConfigured = true;
+    }
+#endif
 
     // device.begin() регистрирует все UART обработчики и запускает облачную логику
     device.begin();
@@ -362,9 +363,8 @@ void setup()
     device.setWsServer(&wsServer);
 
     // WS команды идут через тот же CommandHandler что и MQTT
-    wsServer.setCommandCallback([](const char* command, JsonObjectConst data) {
-        device.handleExternalCommand(command, data);
-    });
+    wsServer.setCommandCallback([](const char *command, JsonObjectConst data)
+                                { device.handleExternalCommand(command, data); });
 
     // Callback для получения конфига от MCU
     device.setConfigReceivedCallback(onConfigReceived);
@@ -375,7 +375,8 @@ void setup()
     // Авто-refresh deviceToken при WS invalid_token:
     // ESP32 делает re-provision на портал и получает актуальный токен.
     // Приложение параллельно делает retry через ~2-3 сек — к тому времени токен обновлён.
-    wsServer.setTokenRefreshCallback([&]() {
+    wsServer.setTokenRefreshCallback([&]()
+                                     {
         auto* csm = device.getCloudStateMachine();
         if (!csm) return;
         HAL_LOG_INFO("DEVICE", "WS auth fail → auto-refreshing token from portal...");
@@ -384,8 +385,7 @@ void setup()
             HAL_LOG_INFO("DEVICE", "WS token auto-refreshed OK");
         } else {
             HAL_LOG_WARN("DEVICE", "WS token refresh failed (no WiFi, no serial, or cooldown)");
-        }
-    });
+        } });
 }
 
 void loop()
