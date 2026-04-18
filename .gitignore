@@ -9,7 +9,7 @@ _private_*
 .vscode/
 .DS_Store
 
-src/secrets.h
+include/secrets.h
 firmware/
 submodules.md
 SIM/
@@ -17,3 +17,6 @@ test/
 read_serial.py
 test_uart_rp2040_emulator.py
 docs-service/
+
+# Environment variables
+.env
