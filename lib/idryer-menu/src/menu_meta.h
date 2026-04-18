@@ -673,7 +673,7 @@ static const MenuMeta g_menu_meta[MENU_META_COUNT] = {
     // [156] pid_kp_heater
     { 156, { "КП", "Kp" }, { nullptr, nullptr },
       META_VALUE, 155, -1, 0,
-      META_VT_F32, 0.0f, 1000.0f, 0.1f, META_SCOPE_PER_UNIT },
+      META_VT_F32, 0.1f, 1000.0f, 0.1f, META_SCOPE_PER_UNIT },
     // [157] pid_ki_heater
     { 157, { "КИ", "Ki" }, { nullptr, nullptr },
       META_VALUE, 155, -1, 0,
@@ -697,7 +697,7 @@ static const MenuMeta g_menu_meta[MENU_META_COUNT] = {
     // [162] pid_kp_chamber
     { 162, { "КП", "Kp" }, { nullptr, nullptr },
       META_VALUE, 161, -1, 0,
-      META_VT_F32, 0.0f, 1000.0f, 0.1f, META_SCOPE_PER_UNIT },
+      META_VT_F32, 0.1f, 1000.0f, 0.1f, META_SCOPE_PER_UNIT },
     // [163] pid_ki_chamber
     { 163, { "КИ", "Ki" }, { nullptr, nullptr },
       META_VALUE, 161, -1, 0,
