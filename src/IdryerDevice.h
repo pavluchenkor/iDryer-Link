@@ -12,6 +12,8 @@
 #include <cloud/command_handler.h>
 #include <cloud/uart_command_sink.h>
 #include <cloud/http_api.h>
+#include <cloud/link_integrations_store.h>
+#include <cloud/link_integrations_manager.h>
 #include <config/config_manager.h>
 #include <mqtt/mqtt_client.h>
 #include <mqtt/ha_mqtt_client.h>
@@ -134,10 +136,17 @@ private:
     cloud::UartCommandSink uartSink_;
     cloud::CommandHandler cmdHandler_;
 
-    // Home Assistant (опциональный)
+    // Home Assistant (опциональный, legacy mDNS-путь)
     ha::HaMqttClient haMqtt_;
     ha::HaPublisher haPublisher_;
     bool haEnabled_ = false;
+
+    // LINK-интеграции (HA / Bambu / Moonraker) — новый контракт
+    // (commands/link_integration + integrations/status).
+    // Пока active == None, никаких клиентов не поднимает — legacy HA
+    // выше продолжает работать без конфликтов.
+    cloud::LinkIntegrationsStore   integrationsStore_;
+    cloud::LinkIntegrationsManager integrations_;
 
     bool helloReceived_ = false;   // Публикации разрешаются после первого Hello.
     uint8_t unitsCount_ = 1;       // Актуализируется из Hello payload.

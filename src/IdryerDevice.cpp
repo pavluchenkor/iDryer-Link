@@ -95,7 +95,7 @@ namespace idryer
                                ICredentialStore *store,
                                DryerUart::UartBridge *uart,
                                const char *apiBaseUrl)
-        : wifi_(wifi), http_(http), store_(store), uart_(uart), api_(http, apiBaseUrl ? apiBaseUrl : IDRYER_API_BASE), cloud_(wifi, store, &api_, &mqtt_), publisher_(&mqtt_), uartSink_(uart), cmdHandler_(&uartSink_), haPublisher_(&haMqtt_)
+        : wifi_(wifi), http_(http), store_(store), uart_(uart), api_(http, apiBaseUrl ? apiBaseUrl : IDRYER_API_BASE), cloud_(wifi, store, &api_, &mqtt_), publisher_(&mqtt_), uartSink_(uart), cmdHandler_(&uartSink_), haPublisher_(&haMqtt_), integrationsStore_(), integrations_(&mqtt_, &integrationsStore_)
     {
     }
 
@@ -137,6 +137,25 @@ namespace idryer
         // Настраиваем callback для синхронизации времени
         cmdHandler_.setTimeSyncCallback([](const char *ts, void *ctx)
                                         { static_cast<IdryerDevice *>(ctx)->syncTimeFromBackend(ts); }, this);
+
+        // =====================================================================
+        // LINK-интеграции (HA / Bambu / Moonraker)
+        // =====================================================================
+        // Подключаем Manager к CommandHandler: он сразу начинает обрабатывать
+        // commands/link_integration и commands/bambu_apply. Пока в NVS нет
+        // конфигураций и active==None — реальных подключений не будет.
+        cmdHandler_.setLinkIntegrationsManager(&integrations_);
+
+        // clientId для HA MQTT — наш serialNumber (совпадает с client_id
+        // в брокере iDryer). Выставляем ДО begin() Manager'а.
+        integrations_.setHaClientId(cloud_.getIdentity().serialNumber);
+
+        // Дефолт — Dryer. Уточним в handleRpHello по фактическому deviceType
+        // из HelloPayload MCU.
+        integrations_.setDeviceType(DryerUart::DeviceType::Dryer);
+
+        integrationsStore_.begin();
+        integrations_.begin();
 
         // UART присутствует → двухмодульная конфигурация → ждём Hello для верификации serial
         cloud_.setWaitForMcuSerial(uart_ != nullptr);
@@ -288,6 +307,11 @@ namespace idryer
         if (haEnabled_)
             haMqtt_.loop();
 
+        // LINK-интеграции: обслуживает BambuClient / MoonrakerClient / HaAdapter
+        // внутри менеджера (reconnect, подписки, парсинг сообщений).
+        // Если active == None — no-op.
+        integrations_.loop();
+
         // Обрабатываем WS сервер (если включён)
         if (wsServer_)
             wsServer_->loop();
@@ -355,6 +379,13 @@ namespace idryer
 
         // Обновляем состояние
         unitsCount_ = payload.unitsCount;
+
+        // Сообщаем LINK-интеграциям фактический deviceType от MCU.
+        // 0 (Unknown/legacy) → трактуем как Dryer.
+        DryerUart::DeviceType dt = (payload.deviceType == 0)
+            ? DryerUart::DeviceType::Dryer
+            : static_cast<DryerUart::DeviceType>(payload.deviceType);
+        integrations_.setDeviceType(dt);
 
         // Сбрасываем retry state
         helloRequestAttempts_ = 0;
@@ -903,6 +934,10 @@ namespace idryer
                 }
             }
         }
+        // integrations/status публикуется при реальных событиях
+        // (конфиг изменился, клиент подключился/отвалился) и один раз
+        // при переходе Cloud в Online — см. onCloudStateChange. Дёргать
+        // каждый loop() не нужно.
     }
 
     static DryerUart::LinkCloudState mapCloudState(cloud::CloudState s)
@@ -1014,6 +1049,14 @@ namespace idryer
             self->publishDeviceInfo(self->lastHello_);
             HAL_LOG_INFO("DEVICE", "Re-published info after MQTT reconnect (mcuSerial=%s)",
                          self->lastHello_.mcuSerial);
+        }
+
+        // Один раз при переходе в Online публикуем retained-snapshot
+        // integrations/status — после реконнекта портал увидит свежее
+        // состояние LINK-интеграций.
+        if (newState == cloud::CloudState::Online)
+        {
+            self->integrations_.publishStatus();
         }
     }
 
