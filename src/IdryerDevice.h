@@ -10,6 +10,7 @@
 #include <cloud/cloud_state_machine.h>
 #include <cloud/telemetry_publisher.h>
 #include <cloud/command_handler.h>
+#include <cloud/uart_command_sink.h>
 #include <cloud/http_api.h>
 #include <config/config_manager.h>
 #include <mqtt/mqtt_client.h>
@@ -130,6 +131,7 @@ private:
     MqttClient mqtt_;
     cloud::CloudStateMachine cloud_;
     cloud::TelemetryPublisher publisher_;
+    cloud::UartCommandSink uartSink_;
     cloud::CommandHandler cmdHandler_;
 
     // Home Assistant (опциональный)

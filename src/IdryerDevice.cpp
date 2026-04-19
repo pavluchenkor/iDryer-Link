@@ -95,7 +95,7 @@ namespace idryer
                                ICredentialStore *store,
                                DryerUart::UartBridge *uart,
                                const char *apiBaseUrl)
-        : wifi_(wifi), http_(http), store_(store), uart_(uart), api_(http, apiBaseUrl ? apiBaseUrl : IDRYER_API_BASE), cloud_(wifi, store, &api_, &mqtt_), publisher_(&mqtt_), cmdHandler_(uart), haPublisher_(&haMqtt_)
+        : wifi_(wifi), http_(http), store_(store), uart_(uart), api_(http, apiBaseUrl ? apiBaseUrl : IDRYER_API_BASE), cloud_(wifi, store, &api_, &mqtt_), publisher_(&mqtt_), uartSink_(uart), cmdHandler_(&uartSink_), haPublisher_(&haMqtt_)
     {
     }
 
