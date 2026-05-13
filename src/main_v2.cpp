@@ -165,17 +165,27 @@ static void onLog(const uint8_t* payload, uint8_t length) {
     if (length < sizeof(UartLogPayload)) return;
     const auto* log = reinterpret_cast<const UartLogPayload*>(payload);
 
-    iDryer::EventKind kind = iDryer::EventKind::Info;
-    if (strncmp(log->severity, "CRIT",  4) == 0 ||
-        strncmp(log->severity, "ERROR", 5) == 0) {
-        kind = iDryer::EventKind::Error;
-    } else if (strncmp(log->severity, "WARN", 4) == 0) {
-        kind = iDryer::EventKind::Warning;
+    HAL_LOG_INFO("UART", "Log[%s] %s/%s: %s (U%u)",
+                 log->severity, log->source, log->event, log->message, log->unitId + 1);
+
+    // Строим JSON вручную, чтобы сохранить все поля как в idryer-protocol:
+    // severity (CRIT/ERROR/WARN/INFO), source (SHT31/HEATER/...), event, message, unitId.
+    // raiseEvent() не использем — оно теряет source и деградирует CRIT→ERROR.
+    StaticJsonDocument<256> doc;
+    doc["severity"] = log->severity;   // "CRIT" | "ERROR" | "WARN" | "INFO"
+    doc["source"]   = log->source;     // "SHT31" | "THERMISTOR" | "HEATER" | ...
+    doc["event"]    = log->event;      // "NO_RESPONSE" | "OVER_MAX" | ...
+    doc["message"]  = log->message;    // human-readable
+
+    char uid[4];
+    if (log->unitId < iDryer::MAX_UNITS) {
+        snprintf(uid, sizeof(uid), "U%u", log->unitId + 1);
+        doc["unitId"] = uid;
+    } else {
+        doc["unitId"] = "DEVICE";
     }
 
-    uint8_t uid = (log->unitId < iDryer::MAX_UNITS) ? log->unitId : 0xFF;
-    HAL_LOG_INFO("UART", "Log[%s] %s: %s", log->severity, log->event, log->message);
-    s_link.raiseEvent(kind, log->event, log->message, uid);
+    s_link.devicePublisher()->publishEvent(doc);
 }
 
 static void onClaimStart(const UartFrameHeader&) {
