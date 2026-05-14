@@ -93,7 +93,7 @@ struct UartLogPayload {
     char    event[32];
     char    message[100];
     uint8_t unitId;
-    uint8_t _pad;
+    uint8_t count;  // occurrence counter (was _pad)
 };
 
 static bool s_mcuConnected = false;
@@ -176,6 +176,7 @@ static void onLog(const uint8_t* payload, uint8_t length) {
     doc["source"]   = log->source;     // "SHT31" | "THERMISTOR" | "HEATER" | ...
     doc["event"]    = log->event;      // "NO_RESPONSE" | "OVER_MAX" | ...
     doc["message"]  = log->message;    // human-readable
+    doc["count"]    = log->count;      // occurrence counter (dedup)
 
     char uid[4];
     if (log->unitId < iDryer::MAX_UNITS) {
