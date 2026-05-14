@@ -223,10 +223,22 @@ static void registerCommands() {
     });
 
     s_link.onCommand("clear_errors", [](JsonObjectConst data) {
-        UartCmdPayload cmd{};
-        cmd.command = UartCmdCode::ClearErrors;
-        cmd.unitId  = data["unitId"] | (uint8_t)0xFF;
-        s_uart.sendCommand(cmd);
+        // Бэкенд может слать unitId как строку "U1" — ArduinoJson не конвертирует в uint8_t,
+        // возвращает 0xFF. RP2040 отклоняет unitId >= NUM_UNITS, поэтому при 0xFF чистим все юниты.
+        uint8_t uid = data["unitId"] | (uint8_t)0xFF;
+        if (uid < iDryer::MAX_UNITS) {
+            UartCmdPayload cmd{};
+            cmd.command = UartCmdCode::ClearErrors;
+            cmd.unitId  = uid;
+            s_uart.sendCommand(cmd);
+        } else {
+            for (uint8_t i = 0; i < iDryer::MAX_UNITS; i++) {
+                UartCmdPayload cmd{};
+                cmd.command = UartCmdCode::ClearErrors;
+                cmd.unitId  = i;
+                s_uart.sendCommand(cmd);
+            }
+        }
     });
 
     s_link.onCommand("storage", [](JsonObjectConst data) {
