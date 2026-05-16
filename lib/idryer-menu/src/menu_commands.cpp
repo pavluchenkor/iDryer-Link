@@ -304,6 +304,11 @@ size_t menu_buildFullJson(char* buf, size_t bufSize) {
             item["u"] = meta->unit[lang];
         }
 
+        // Роль для портала (semantic role → widget)
+        if (meta->role) {
+            item["r"] = meta->role;
+        }
+
         // Для val/tog добавляем значения и диапазоны
         if (meta->type == META_VALUE || meta->type == META_TOGGLE) {
             // min/max/step для value

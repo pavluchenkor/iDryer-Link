@@ -21,6 +21,9 @@
 
 #include "version.h"
 
+#include <menu_commands.h>
+#include <menu_cache.h>
+
 using namespace idryer;
 
 // ── Пины UART (ESP32-C3 Super Mini, JTAG-shared → требуют gpio_reset_pin) ──
@@ -61,15 +64,38 @@ static uint16_t s_lastConfigLen = 0;
 // Состояние для onlne-transition в every().
 static bool s_prevOnline = false;
 
+// Статический буфер для полного меню JSON ({v, menu:[...]}).
+static char s_menuJson[MENU_FULL_JSON_BUF_SIZE];
+
 // ── Вспомогательная функция публикации конфига ────────────────────────────────
+// json — сырой JSON от RP2040: {v, full:true, vals:{...}}
+// Парсим его в g_menu_cache, затем собираем {v, menu:[...]} для портала.
 static void publishConfig(const char* json, uint16_t len) {
     if (!json || len == 0) return;
-    if (len < CONFIG_BUFFER_SIZE) {
-        memcpy(s_lastConfig, json, len);
-        s_lastConfig[len] = '\0';
-        s_lastConfigLen = len;
+
+    // Парсим vals из RP2040 → обновляем g_menu_cache
+    if (!menu_parseFullConfig(json)) {
+        HAL_LOG_WARN("MENU", "parseFullConfig failed, publishing raw");
+        s_link.devicePublisher()->publishConfigRaw(json, len);
+        return;
     }
-    s_link.devicePublisher()->publishConfigRaw(json, len);
+
+    // Собираем {v, menu:[...]} для портала
+    size_t menuLen = menu_buildFullJson(s_menuJson, sizeof(s_menuJson));
+    if (menuLen == 0) {
+        HAL_LOG_WARN("MENU", "buildFullJson failed, publishing raw");
+        s_link.devicePublisher()->publishConfigRaw(json, len);
+        return;
+    }
+
+    // Кэшируем собранный JSON (для get_config и online-transition)
+    if (menuLen < CONFIG_BUFFER_SIZE) {
+        memcpy(s_lastConfig, s_menuJson, menuLen);
+        s_lastConfig[menuLen] = '\0';
+        s_lastConfigLen = (uint16_t)menuLen;
+    }
+
+    s_link.devicePublisher()->publishConfigRaw(s_menuJson, menuLen);
 }
 
 // ── Маппинг UartDryerMode → iDryer::UnitMode ─────────────────────────────────
