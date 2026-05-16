@@ -113,6 +113,13 @@ static void onHello(const UartHelloPayload& p, const UartFrameHeader&) {
     strncpy(ack.ssid, WiFi.SSID().c_str(), sizeof(ack.ssid) - 1);
     s_uart.sendHelloAck(ack);
     s_mcuConnected = true;
+
+    // Синхронизируем число юнитов из EEPROM RP2040 → SDK → бэкенд
+    if (p.unitsCount >= 1 && p.unitsCount <= iDryer::MAX_UNITS) {
+        s_link.setUnitsCount(p.unitsCount);
+        s_link.publishInfoNow(); // переиздаём info с правильным unitsCount
+    }
+
     // Запрашиваем конфиг сразу после Hello
     requestConfig();
 }
