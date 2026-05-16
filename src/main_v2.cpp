@@ -200,6 +200,16 @@ static void onUartError(const UartErrorPayload& p, bool remote) {
 
 // ── Портальные команды (портал → ESP32 → RP2040) ─────────────────────────────
 
+// Парсит unitId вида "U1".."U4" → индекс 0..3. Возвращает 0xFF если не распознан.
+static uint8_t parseUnitId(JsonObjectConst data) {
+    JsonVariantConst v = data["unitId"];
+    if (v.is<const char*>()) {
+        const char* s = v.as<const char*>();
+        if (s && s[0] == 'U' && s[1] >= '1' && s[1] <= '4') return (uint8_t)(s[1] - '1');
+    }
+    return 0xFF;
+}
+
 static void registerCommands() {
     s_link.onCommand("get_config", [](JsonObjectConst) {
         if (s_lastConfigLen > 0)
@@ -210,9 +220,10 @@ static void registerCommands() {
         UartCmdPayload cmd{};
         cmd.command     = UartCmdCode::Start;
         cmd.targetState = (uint8_t)UartDryerMode::Drying;
-        cmd.unitId      = data["unitId"] | (uint8_t)0xFF;
-        cmd.arg0        = (uint32_t)((data["targetTempC"] | 0.0f) * 10);
-        cmd.arg1        = (data["durationS"] | 0u) / 60u;
+        cmd.unitId      = parseUnitId(data);
+        JsonObjectConst params = data["params"];
+        cmd.arg0        = (uint32_t)(params["temperature"].as<int>() * 10);
+        cmd.arg1        = (uint32_t)params["duration"].as<int>();
         s_uart.sendCommand(cmd);
     });
 
@@ -246,8 +257,28 @@ static void registerCommands() {
         UartCmdPayload cmd{};
         cmd.command     = UartCmdCode::Start;
         cmd.targetState = (uint8_t)UartDryerMode::Storage;
-        cmd.unitId      = data["unitId"] | (uint8_t)0xFF;
+        cmd.unitId      = parseUnitId(data);
+        JsonObjectConst params = data["params"];
+        cmd.arg0        = (uint32_t)(params["temperature"].as<int>() * 10);
+        cmd.arg1        = (uint32_t)params["humidity"].as<int>();
         s_uart.sendCommand(cmd);
+    });
+
+    s_link.onCommand("profile", [](JsonObjectConst data) {
+        UartProfilePayload p{};
+        p.unitId      = parseUnitId(data);
+        JsonObjectConst params = data["params"];
+        p.startStage  = params["startStage"].as<uint8_t>();
+        JsonArrayConst stages = params["stages"];
+        p.totalStages = 0;
+        for (JsonObjectConst s : stages) {
+            if (p.totalStages >= 10) break;
+            uint8_t i = p.totalStages++;
+            p.stages[i].temp = (uint16_t)s["temperature"].as<int>();
+            p.stages[i].ramp = (uint16_t)s["ramp"].as<int>();
+            p.stages[i].hold = (uint16_t)s["hold"].as<int>();
+        }
+        s_uart.sendProfileCommand(p);
     });
 
     // Heartbeat → RP2040: без него RP2040 не устанавливает uartLinkReady=true
@@ -309,6 +340,16 @@ void setup() {
     s_uart.setClaimStartHandler(onClaimStart);
     s_uart.setErrorHandler(onUartError);
     s_uart.setLogHandler(onLog);
+    s_uart.setRfidHandler([](const UartRfidPayload& p, const UartFrameHeader&) {
+        StaticJsonDocument<128> doc;
+        char uid[4];
+        snprintf(uid, sizeof(uid), "U%u", p.unitId + 1);
+        doc["unitId"]   = uid;
+        doc["event"]    = (p.event == 1) ? "tag_detected" : "tag_removed";
+        doc["readerId"] = p.readerId;
+        if (p.event == 1) doc["tag"] = p.tag;
+        s_link.devicePublisher()->publishRfid(doc);
+    });
 
     HAL_LOG_INFO("MAIN", "iDryer Link v2 ready, fw=%s", VERSION_STR);
 }
