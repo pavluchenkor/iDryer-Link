@@ -111,17 +111,6 @@ static iDryer::UnitMode modeFromUart(UartDryerMode m) {
 
 // ── UART handlers (RP2040 → ESP32) ────────────────────────────────────────────
 
-// Зеркало DryerUart::LogPayload (idryer-protocol) — RP2040 шлёт бинарный блок.
-// Структура задокументирована в idryer-protocol/uart_protocol.h строки 301-308.
-struct UartLogPayload {
-    char    severity[10];  // "CRIT" | "ERROR" | "WARN" | "INFO"
-    char    source[20];
-    char    event[32];
-    char    message[100];
-    uint8_t unitId;
-    uint8_t count;  // occurrence counter (was _pad)
-};
-
 static bool s_mcuConnected = false;
 
 static void requestConfig() {
@@ -195,8 +184,8 @@ static void onConfigChunk(const UartConfigChunkPayload& p, uint8_t dataLen,
 }
 
 static void onLog(const uint8_t* payload, uint8_t length) {
-    if (length < sizeof(UartLogPayload)) return;
-    const auto* log = reinterpret_cast<const UartLogPayload*>(payload);
+    if (length < sizeof(idryer::UartLogPayload)) return;
+    const auto* log = reinterpret_cast<const idryer::UartLogPayload*>(payload);
 
     HAL_LOG_INFO("UART", "Log[%s] %s/%s: %s (U%u)",
                  log->severity, log->source, log->event, log->message, log->unitId + 1);
@@ -209,7 +198,6 @@ static void onLog(const uint8_t* payload, uint8_t length) {
     doc["source"]   = log->source;     // "SHT31" | "THERMISTOR" | "HEATER" | ...
     doc["event"]    = log->event;      // "NO_RESPONSE" | "OVER_MAX" | ...
     doc["message"]  = log->message;    // human-readable
-    doc["count"]    = log->count;      // occurrence counter (dedup)
 
     char uid[4];
     if (log->unitId < iDryer::MAX_UNITS) {
@@ -263,7 +251,14 @@ static void registerCommands() {
     s_link.onCommand("stop", [](JsonObjectConst data) {
         UartCmdPayload cmd{};
         cmd.command = UartCmdCode::Stop;
-        cmd.unitId  = data["unitId"] | (uint8_t)0xFF;
+        cmd.unitId  = parseUnitId(data);
+        s_uart.sendCommand(cmd);
+    });
+
+    s_link.onCommand("find", [](JsonObjectConst data) {
+        UartCmdPayload cmd{};
+        cmd.command = UartCmdCode::Find;
+        cmd.unitId  = parseUnitId(data);
         s_uart.sendCommand(cmd);
     });
 
@@ -328,9 +323,9 @@ static void registerCommands() {
         size_t len = serializeJson(doc, json, sizeof(json));
 
         UartConfigChunkPayload p{};
-        p.header.transferId = ++s_configTid;
-        p.header.totalSize  = (uint16_t)len;
-        p.header.chunkIndex = 0;
+        p.transferId = ++s_configTid;
+        p.totalSize  = (uint16_t)len;
+        p.chunkIndex = 0;
         memcpy(p.data, json, len);
         s_uart.sendConfigPushChunk(p,
             UART_CONFIG_CHUNK_HEADER_SIZE + (uint8_t)len,
@@ -346,9 +341,9 @@ static void registerCommands() {
         size_t len = serializeJson(doc, json, sizeof(json));
 
         UartConfigChunkPayload p{};
-        p.header.transferId = ++s_configTid;
-        p.header.totalSize  = (uint16_t)len;
-        p.header.chunkIndex = 0;
+        p.transferId = ++s_configTid;
+        p.totalSize  = (uint16_t)len;
+        p.chunkIndex = 0;
         memcpy(p.data, json, len);
         s_uart.sendConfigPushChunk(p,
             UART_CONFIG_CHUNK_HEADER_SIZE + (uint8_t)len,
@@ -362,7 +357,7 @@ static void registerCommands() {
         hb.uptimeSeconds   = millis() / 1000;
         hb.wifiRssiDbm     = (int16_t)WiFi.RSSI();
         hb.errorsSinceBoot = 0;
-        hb.cloudState      = s_link.isOnline() ? 7 : 1; // Online=7, WifiConnecting=1
+        hb.cloudState      = static_cast<idryer::UartLinkCloudState>(s_link.isOnline() ? 7 : 1);
         s_uart.sendHeartbeat(hb);
     });
 
