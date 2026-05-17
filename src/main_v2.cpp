@@ -33,7 +33,7 @@ constexpr int UART_TX_PIN = 7;
 // ── SDK объекты ──────────────────────────────────────────────────────────────
 static const iDryer::Config CFG = {
     .deviceType        = iDryer::DeviceType::Dryer,
-    .unitsCount        = 4,
+    .unitsCount        = 1,  // реальное число физических юнитов на этом железе; уточняется из Hello RP2040
     .hasHeaterPower    = true,
     .hasFanStatus      = true,
     .hasLed            = false,
@@ -314,6 +314,47 @@ static void registerCommands() {
         s_uart.sendProfileCommand(p);
     });
 
+    // set/invoke — пересылают JSON в RP2040 через ConfigPush (фрагмент с LAST_FRAGMENT).
+    static uint16_t s_configTid = 0;
+
+    s_link.onCommand("set", [](JsonObjectConst data) {
+        if (!data["id"].is<int>()) return;
+        char json[128];
+        StaticJsonDocument<128> doc;
+        doc["cmd"]  = "set";
+        doc["id"]   = data["id"].as<int>();
+        doc["unit"] = data["unit"] | 0;
+        if (data.containsKey("val")) doc["val"] = data["val"];
+        size_t len = serializeJson(doc, json, sizeof(json));
+
+        UartConfigChunkPayload p{};
+        p.header.transferId = ++s_configTid;
+        p.header.totalSize  = (uint16_t)len;
+        p.header.chunkIndex = 0;
+        memcpy(p.data, json, len);
+        s_uart.sendConfigPushChunk(p,
+            UART_CONFIG_CHUNK_HEADER_SIZE + (uint8_t)len,
+            UART_FLAG_ACK_REQ | UART_FLAG_LAST_FRAGMENT);
+    });
+
+    s_link.onCommand("invoke", [](JsonObjectConst data) {
+        if (!data["id"].is<int>()) return;
+        char json[64];
+        StaticJsonDocument<64> doc;
+        doc["cmd"] = "invoke";
+        doc["id"]  = data["id"].as<int>();
+        size_t len = serializeJson(doc, json, sizeof(json));
+
+        UartConfigChunkPayload p{};
+        p.header.transferId = ++s_configTid;
+        p.header.totalSize  = (uint16_t)len;
+        p.header.chunkIndex = 0;
+        memcpy(p.data, json, len);
+        s_uart.sendConfigPushChunk(p,
+            UART_CONFIG_CHUNK_HEADER_SIZE + (uint8_t)len,
+            UART_FLAG_ACK_REQ | UART_FLAG_LAST_FRAGMENT);
+    });
+
     // Heartbeat → RP2040: без него RP2040 не устанавливает uartLinkReady=true
     // и никогда не шлёт накопленные ошибки (errlog) через UART.
     s_link.every(5000, []() {
@@ -344,6 +385,7 @@ static void registerCommands() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 void setup() {
+    Serial.begin(115200);
     WiFi.persistent(false);
 
     s_link.onClaimPin([](const char* pin, uint32_t exp) {
