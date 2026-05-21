@@ -1,53 +1,57 @@
-# Две ветки и два репозитория
+# iDryer Link
 
-**Документация для разработчика стороннего устройства** (библиотека `idryer-protocol`, облако iDryer): [lib/idryer-protocol/docs/00-developer/01-your-product-in-idryer-cloud.md](lib/idryer-protocol/docs/00-developer/01-your-product-in-idryer-cloud.md). Справка по репозиторию Link: [docs/guide/README.md](docs/guide/README.md).
+**iDryer Link** is a connectivity module for iDryer. It connects to the controller through the RJ45 port and brings the device online: after Wi-Fi setup, the dryer can work with the iDryer portal and mobile app.
 
----
+The RJ45 port is used as a power and UART connector here. **It is not a network port**: do not connect Link to a switch or router.
 
-Цель: все подробные коммиты живут в закрытом репозитории (`private`) в ветке `dev`; на GitHub (`origin`) публикуется только аккуратный `main`.
+![iDryer Link](docs/img/link2.png)
 
-## Разовая настройка
-- Проверить текущую ветку: `git status -sb` или точечно `git branch --show-current`.
-- Если база называлась `master`, переименовать: `git branch -m master dev`.
-- Убедиться, что закрытый remote уже есть: `git remote -v` (ищем `private`).
-- Создать чистый `main` из текущего состояния:
-  ```bash
-  git checkout dev
-  git checkout --orphan main
-  git add .
-  git commit -m "feat: initial clean release"
-  git push origin main      # только чистая ветка
-  git push private dev      # полный журнал в приват
-  git branch --set-upstream-to=private/dev dev
-  git branch --set-upstream-to=origin/main main
-  ```
+## What Link Does
 
-## Как создать репозитории через GitHub CLI (`gh`)
-- Публичный: `gh repo create <user>/<repo> --public --source . --remote origin --push`.
-- Закрытый: `gh repo create <user>/<repo>-private --private --source . --remote private --push`.
-- Если репозитории уже созданы в веб-интерфейсе, просто добавьте remotes:  
-  `git remote add origin git@github.com:<user>/<repo>.git`  
-  `git remote add private git@github.com:<user>/<repo>-private.git`
+- Connects iDryer to the internet over Wi-Fi.
+- Links the device to [portal.idryer.org](https://portal.idryer.org).
+- Works with the iDryer mobile app.
+- Supports firmware installation through the web flasher.
+- Provides open wiring diagrams and a CAD case file.
 
-## Ежедневная работа (dev)
-- Всегда коммитьте в `dev`.
-- Бэкапите историю только в закрытый remote: `git push private dev`.
-- Не пушьте `dev` в `origin`, чтобы не раскрывать процесс.
+## App And Portal
 
-## Публикация чистой версии (main)
-```bash
-git checkout main
-git merge --squash dev   # берём результат без истории
-git commit -m "feat: краткое описание релиза"
-git push origin main     # видно на GitHub
-git checkout dev
-git merge main           # опционально подтянуть итоговый снапшот
-git push private dev     # обновить приватную историю
-```
+- [iDryer on the App Store](https://apps.apple.com/app/idryer/id6760609044)
+- [iDryer on Google Play](https://play.google.com/store/apps/details?id=org.idryer.mobile)
+- [iDryer Portal](https://portal.idryer.org)
+- [Web flasher](https://install.idryer.org)
 
-## Быстрые проверки
-- `git status` — нет ли случайных изменений.
-- `git log --oneline --decorate --graph --all` — `dev` уходит только в `private`, `main` линейный.
+![iDryer Portal dashboard](docs/img/portal1.png)
 
-## Резервная копия офлайн
-- `git bundle create backups/dev-$(date +%F).bundle dev`
+![iDryer Portal spool storage](docs/img/portal2.png)
+
+## Quick Start
+
+1. Assemble the RJ45 cable using the [wiring diagram in the guide](docs/README.en.md#how-to-connect-to-the-controller).
+2. Connect the wires to the ESP32-C3 board.
+3. Flash Link through [install.idryer.org](https://install.idryer.org), following the instructions on the site.
+
+Full guide: [docs/README.en.md](docs/README.en.md)
+
+## Diagrams And Files
+
+![Link connection](docs/img/link1.png)
+
+- [Russian guide](docs/README.ru.md)
+- [English guide](docs/README.en.md)
+- [RJ45 diagram](docs/img/RJ45.png)
+- [Wiring diagram](docs/img/wiring.png)
+- [ESP32-C3 Super Mini board](docs/img/esp32superMini.png)
+- [ESP32-C3 Super Mini pinout](docs/img/ESP32-C3-Super-Mini-pinout-low.jpg)
+- [ESP32-C3 Zero Waveshare pinout](docs/img/ESP32-C3-ZERO-Waveshare-pinout-low.jpg)
+- [Case CAD file](docs/cad/link-case.stp)
+
+## For Developers
+
+Technical materials are kept in a separate section:
+
+- [Repository notes](docs/developer/repository-workflow.md)
+- [Post-build scripts](docs/developer/POST_BUILD_SCRIPTS.md)
+- [Staging](docs/developer/STAGING.md)
+- [Developer tools](docs/developer/TOOLS.md)
+- [Documentation map](docs/guide/README.md)

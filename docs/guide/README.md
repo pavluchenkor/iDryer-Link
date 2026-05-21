@@ -16,9 +16,9 @@
 | Файл | Для кого |
 |------|----------|
 | [docs/README.ru.md](../README.ru.md) · [README.en.md](../README.en.md) | Пользователь: подключение, веб-флешер |
-| [STAGING.md](../../STAGING.md) | Разработчик Link: тестовый стенд, auto-claim |
-| [POST_BUILD_SCRIPTS.md](../../POST_BUILD_SCRIPTS.md) | Сборка → flasher-portal |
-| [TOOLS.md](../../TOOLS.md), [tools/README.md](../../tools/README.md) | Эмулятор MCU, mock API |
+| [STAGING.md](../developer/STAGING.md) | Разработчик Link: тестовый стенд, auto-claim |
+| [POST_BUILD_SCRIPTS.md](../developer/POST_BUILD_SCRIPTS.md) | Сборка → flasher-portal |
+| [TOOLS.md](../developer/TOOLS.md), [tools/README.md](../../tools/README.md) | Эмулятор MCU, mock API |
 | [platformio.ini](../../platformio.ini) | Окружения, `IDRYER_*`, MQTT |
 | [on-security-trust-and-open-source.md](../../on-security-trust-and-open-source.md) | Доверие и открытый код |
 

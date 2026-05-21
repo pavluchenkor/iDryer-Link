@@ -31,7 +31,7 @@ python3 tools/read_serial.py
 | **mock_portal.py** | Mock Backend для cloud flow | ✅ Актуален |
 | **read_serial.py** | Serial монитор ESP32 | ✅ Актуален |
 
-Подробная документация: [tools/README.md](tools/README.md)
+Подробная документация: [tools/README.md](../../tools/README.md)
 
 ## Критические обновления v2.0
 

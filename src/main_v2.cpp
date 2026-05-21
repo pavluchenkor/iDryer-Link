@@ -15,6 +15,7 @@
 
 #include <iDryer.h>
 #include <idryer_uart.h>
+#include <idryer_integrations.h>
 #include <config/config_manager.h>
 #include <hal/hal_arduino.h>
 #include <local_access/device_publisher.h>
@@ -64,6 +65,11 @@ static uint16_t s_lastConfigLen = 0;
 // Состояние для onlne-transition в every().
 static bool s_prevOnline = false;
 
+// HA controls state — температура и время для команды drying из HA.
+static int  s_haDryTemp          = 60;
+static int  s_haDryTime          = 240;
+static bool s_haControlsReady    = false;
+
 // Статический буфер для полного меню JSON ({v, menu:[...]}).
 static char s_menuJson[MENU_FULL_JSON_BUF_SIZE];
 
@@ -96,6 +102,49 @@ static void publishConfig(const char* json, uint16_t len) {
     }
 
     s_link.devicePublisher()->publishConfigRaw(s_menuJson, menuLen);
+
+    // При первом получении конфига регистрируем HA controls с реальными min/max из меню.
+    if (!s_haControlsReady) {
+        s_haControlsReady = true;
+        int tempMin = (int)g_menu_meta[3].min_val;
+        int tempMax = (int)g_menu_meta[3].max_val;
+        int timeMin = (int)g_menu_meta[4].min_val;
+        int timeMax = (int)g_menu_meta[4].max_val;
+        s_haDryTemp = (int)g_menu_cache.getFloat(3);
+        s_haDryTime = (int)g_menu_cache.getFloat(4);
+
+        auto& ha = s_link.ha();
+        ha.number("dry_temp", "Drying temperature", tempMin, tempMax,
+                  [](int v) { s_haDryTemp = v; }, "°C", "mdi:thermometer-plus");
+        ha.number("dry_time", "Drying duration", timeMin, timeMax,
+                  [](int v) { s_haDryTime = v; }, "min", "mdi:timer-outline");
+        ha.button("start_drying", "Start drying", []() {
+            UartCmdPayload cmd{};
+            cmd.command     = UartCmdCode::Start;
+            cmd.targetState = (uint8_t)UartDryerMode::Drying;
+            cmd.unitId      = 0;
+            cmd.arg0        = (uint32_t)(s_haDryTemp * 10);
+            cmd.arg1        = (uint32_t)s_haDryTime;
+            s_uart.sendCommand(cmd);
+        }, "mdi:play-circle");
+        ha.button("start_storage", "Start storage", []() {
+            UartCmdPayload cmd{};
+            cmd.command     = UartCmdCode::Start;
+            cmd.targetState = (uint8_t)UartDryerMode::Storage;
+            cmd.unitId      = 0;
+            cmd.arg0        = (uint32_t)((int)g_menu_meta[7].min_val * 10);
+            cmd.arg1        = (uint32_t)g_menu_meta[8].min_val;
+            s_uart.sendCommand(cmd);
+        }, "mdi:archive");
+        ha.button("stop", "Stop", []() {
+            UartCmdPayload cmd{};
+            cmd.command = UartCmdCode::Stop;
+            cmd.unitId  = 0;
+            s_uart.sendCommand(cmd);
+        }, "mdi:stop-circle");
+
+        s_link.ha().republishAll();
+    }
 }
 
 // ── Маппинг UartDryerMode → iDryer::UnitMode ─────────────────────────────────
@@ -394,6 +443,7 @@ void setup() {
     });
 
     s_link.begin();
+    s_link.integrationsManager()->setActive(idryer::cloud::ActiveIntegration::Ha);
     registerCommands();
 
     // ESP32-C3: GPIO6/7 по умолчанию JTAG — сбрасываем перед Serial1.

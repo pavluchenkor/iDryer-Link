@@ -1,9 +1,0 @@
-{
-  "projectRoot": ".",
-  "defaultShell": "/bin/zsh",
-  "mcpServers": {
-    "filesystem": { "path": "." },
-    "command": { "shell": "/bin/zsh" },
-    "http": {}
-  }
-}
