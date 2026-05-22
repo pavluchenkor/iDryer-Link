@@ -50,7 +50,7 @@ static const iDryer::Config CFG = {
     .statusPeriodMs    = 10000,
     .hardwareVersion   = "DRYER-v3",
     .firmwareVersion   = VERSION_STR,
-    .model             = "iDryer Dryer",
+    .model             = "iDryer",
 };
 
 static iDryer::Link                s_link(CFG);
