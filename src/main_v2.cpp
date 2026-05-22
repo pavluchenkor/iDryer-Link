@@ -183,6 +183,7 @@ static void onHello(const UartHelloPayload& p, const UartFrameHeader&) {
     // Pass mcuSerial to cloud layer first — must happen before setUnitsCount
     // and publishInfoNow so that buildInfoJson() picks up the correct mcuSerial.
     auto result = s_link.setMcuSerial(p.mcuSerial);
+    s_link.setMcuFirmwareVersion(p.firmwareVersion);
 
     if (result == iDryer::McuSerialResult::Mismatch) {
         // Different RP2040 connected — signal error to controller via UART.
