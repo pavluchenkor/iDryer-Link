@@ -172,19 +172,38 @@ static void requestConfig() {
 static void onHello(const UartHelloPayload& p, const UartFrameHeader&) {
     HAL_LOG_INFO("UART", "Hello: type=%u fw=%u units=%u serial=%s",
                  p.deviceType, p.firmwareVersion, p.unitsCount, p.mcuSerial);
+
+    // Always ack Hello to give RP2040 connection info (IP/SSID).
     UartHelloAckPayload ack{};
     ack.ipAddress = (uint32_t)WiFi.localIP();
     strncpy(ack.ssid, WiFi.SSID().c_str(), sizeof(ack.ssid) - 1);
     s_uart.sendHelloAck(ack);
     s_mcuConnected = true;
 
-    // Синхронизируем число юнитов из EEPROM RP2040 → SDK → бэкенд
-    if (p.unitsCount >= 1 && p.unitsCount <= iDryer::MAX_UNITS) {
-        s_link.setUnitsCount(p.unitsCount);
-        s_link.publishInfoNow(); // переиздаём info с правильным unitsCount
+    // Pass mcuSerial to cloud layer first — must happen before setUnitsCount
+    // and publishInfoNow so that buildInfoJson() picks up the correct mcuSerial.
+    auto result = s_link.setMcuSerial(p.mcuSerial);
+
+    if (result == iDryer::McuSerialResult::Mismatch) {
+        // Different RP2040 connected — signal error to controller via UART.
+        // Cloud layer does not touch UART; product code handles the signal here.
+        UartClaimStatusPayload sp{};
+        sp.status = UartClaimStatus::Error;
+        s_uart.sendClaimStatus(sp);
+        return;
     }
 
-    // Запрашиваем конфиг сразу после Hello
+    if (result == iDryer::McuSerialResult::Ignored) {
+        HAL_LOG_WARN("UART", "Hello mcuSerial empty, waiting for valid Hello");
+        return;
+    }
+
+    // mcuSerial accepted (AcceptedFirstBind or AcceptedBound) — proceed.
+    if (p.unitsCount >= 1 && p.unitsCount <= iDryer::MAX_UNITS) {
+        s_link.setUnitsCount(p.unitsCount);
+        s_link.publishInfoNow(); // info now contains correct mcuSerial
+    }
+
     requestConfig();
 }
 
@@ -432,6 +451,10 @@ void setup() {
     Serial.begin(115200);
     WiFi.persistent(false);
 
+    s_link.onDiagnostic([](const char* message) {
+        Serial.println(message);
+    });
+
     s_link.onClaimPin([](const char* pin, uint32_t exp) {
         Serial.printf("CLAIM_PIN:%s:%lu\n", pin, exp);
         Serial.flush();
@@ -442,6 +465,7 @@ void setup() {
         s_uart.sendClaimStatus(sp);
     });
 
+    s_link.setWaitForMcuSerial(true);
     s_link.begin();
     s_link.integrationsManager()->setActive(idryer::cloud::ActiveIntegration::Ha);
     registerCommands();
@@ -477,4 +501,22 @@ void setup() {
 void loop() {
     s_link.loop();
     s_uart.loop();
+
+    // Periodic HelloRequest to RP2040 until it responds (max 12 attempts, every 5s).
+    // Needed when RP2040 was already running before ESP32 booted and its initial
+    // Hello was missed.
+    if (!s_mcuConnected) {
+        static uint32_t s_lastHelloReqMs = 0;
+        static uint8_t  s_helloReqCount  = 0;
+        const uint32_t  now = millis();
+        if (s_helloReqCount < 12 && now - s_lastHelloReqMs >= 5000) {
+            UartHelloPayload req{};
+            req.role = UartRole::HelloRequest;
+            req.firmwareVersion = VERSION_NUMBER;
+            s_uart.sendHello(req, false);
+            s_lastHelloReqMs = now;
+            s_helloReqCount++;
+            HAL_LOG_INFO("UART", "HelloRequest -> RP2040 (attempt %u/12)", s_helloReqCount);
+        }
+    }
 }

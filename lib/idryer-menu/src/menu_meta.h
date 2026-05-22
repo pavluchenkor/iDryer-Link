@@ -70,7 +70,7 @@ static const MenuMeta g_menu_meta[MENU_META_COUNT] = {
     // [5] dry_start
     { 5, { "СТАРТ", "START" }, { nullptr, nullptr },
       META_ACTION, 2, -1, 0,
-      META_VT_F32, 0.0f, 0.0f, 0.0f, META_SCOPE_PER_UNIT, "drying.start" },
+      META_VT_F32, 0.0f, 0.0f, 0.0f, META_SCOPE_PER_UNIT, nullptr },
     // [6] storage
     { 6, { "ХРАНЕНИЕ", "STORAGE" }, { nullptr, nullptr },
       META_SUBMENU, 0, 7, 4,
@@ -90,7 +90,7 @@ static const MenuMeta g_menu_meta[MENU_META_COUNT] = {
     // [10] storage_start
     { 10, { "СТАРТ", "START" }, { nullptr, nullptr },
       META_ACTION, 6, -1, 0,
-      META_VT_F32, 0.0f, 0.0f, 0.0f, META_SCOPE_PER_UNIT, "storage.start" },
+      META_VT_F32, 0.0f, 0.0f, 0.0f, META_SCOPE_PER_UNIT, nullptr },
     // [11] profile
     { 11, { "ПРОФИЛЬ", "PROFILE" }, { nullptr, nullptr },
       META_SUBMENU, 0, 12, 11,
@@ -106,7 +106,7 @@ static const MenuMeta g_menu_meta[MENU_META_COUNT] = {
     // [14] start_stage
     { 14, { "СТАРТ ПРОФИЛЯ", "PROFILE START" }, { nullptr, nullptr },
       META_ACTION, 12, -1, 0,
-      META_VT_F32, 0.0f, 0.0f, 0.0f, META_SCOPE_PER_UNIT, "profile.start" },
+      META_VT_F32, 0.0f, 0.0f, 0.0f, META_SCOPE_PER_UNIT, nullptr },
     // [15] stage_01
     { 15, { "ЭТАП 01", "STAGE 01" }, { nullptr, nullptr },
       META_SUBMENU, 11, 16, 3,
@@ -674,7 +674,7 @@ static const MenuMeta g_menu_meta[MENU_META_COUNT] = {
     // [156] pid_kp_heater
     { 156, { "КП", "Kp" }, { nullptr, nullptr },
       META_VALUE, 155, -1, 0,
-      META_VT_F32, 0.0f, 1000.0f, 0.1f, META_SCOPE_PER_UNIT, nullptr },
+      META_VT_F32, 0.1f, 1000.0f, 0.1f, META_SCOPE_PER_UNIT, nullptr },
     // [157] pid_ki_heater
     { 157, { "КИ", "Ki" }, { nullptr, nullptr },
       META_VALUE, 155, -1, 0,
@@ -698,7 +698,7 @@ static const MenuMeta g_menu_meta[MENU_META_COUNT] = {
     // [162] pid_kp_chamber
     { 162, { "КП", "Kp" }, { nullptr, nullptr },
       META_VALUE, 161, -1, 0,
-      META_VT_F32, 0.0f, 1000.0f, 0.1f, META_SCOPE_PER_UNIT, nullptr },
+      META_VT_F32, 0.1f, 1000.0f, 0.1f, META_SCOPE_PER_UNIT, nullptr },
     // [163] pid_ki_chamber
     { 163, { "КИ", "Ki" }, { nullptr, nullptr },
       META_VALUE, 161, -1, 0,
