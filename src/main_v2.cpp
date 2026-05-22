@@ -371,7 +371,7 @@ static void registerCommands() {
         for (JsonObjectConst s : stages) {
             if (p.totalStages >= 10) break;
             uint8_t i = p.totalStages++;
-            p.stages[i].temp = (uint16_t)s["temperature"].as<int>();
+            p.stages[i].temp = (uint16_t)(s["temperature"].as<int>() * 10);
             p.stages[i].ramp = (uint16_t)s["ramp"].as<int>();
             p.stages[i].hold = (uint16_t)s["hold"].as<int>();
         }
