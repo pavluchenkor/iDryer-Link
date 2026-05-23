@@ -29,7 +29,7 @@ BLUE = "\033[94m"
 YELLOW = "\033[93m"
 RESET = "\033[0m"
 
-PRODUCT_NAME = "iDryer-link"
+PRODUCT_NAME = "idryer-link"
 PRODUCT_LABEL = "iDryer Link"
 
 BOOT_APP0_SRC = Path.home() / ".platformio/packages/framework-arduinoespressif32/tools/partitions/boot_app0.bin"
