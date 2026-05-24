@@ -74,6 +74,45 @@ static bool s_haControlsReady    = false;
 // Буфер для собранного меню выделяется на heap по требованию (publishConfig).
 // В .bss держать ~38 КБ нельзя — фрагментирует heap, ломает TLS-handshake mbedtls.
 
+// ── Публикация delta (один-несколько изменённых пунктов) ─────────────────────
+// json — сырой delta от RP2040: {"rev":N,"vals":{"7":[50]}}
+// Используется когда ConfigReceiver::isDelta() (старший бит transferId).
+// Канон в mqtt_contract.yaml (config_delta): {"rev":N,"d":{"7":[50]}} —
+// поле 'd' вместо 'vals'. Перепаковываем перед publish.
+static void publishConfigDelta(const char* json, uint16_t len) {
+    if (!json || len == 0) return;
+
+    // Обновляем g_menu_cache (для local-WS клиентов и других потребителей).
+    if (!menu_parseDelta(json)) {
+        HAL_LOG_WARN("MENU", "parseDelta FAILED, dropping (%u bytes)", len);
+        return;
+    }
+
+    // Парсим RP2040-формат и переименовываем "vals" → "d". 512 байт capacity
+    // хватает на 1–3 изменённых per-unit пункта; на стеке.
+    StaticJsonDocument<512> doc;
+    if (deserializeJson(doc, json, len)) {
+        HAL_LOG_WARN("MENU", "delta deserialize FAILED (%u bytes)", len);
+        return;
+    }
+    if (!doc.containsKey("vals")) {
+        HAL_LOG_WARN("MENU", "delta missing 'vals' key, dropping");
+        return;
+    }
+    doc["d"] = doc["vals"];
+    doc.remove("vals");
+
+    char buf[256];
+    size_t out = serializeJson(doc, buf, sizeof(buf));
+    if (out == 0) {
+        HAL_LOG_WARN("MENU", "delta reserialize FAILED");
+        return;
+    }
+
+    s_link.devicePublisher()->publishConfigDelta(buf, out);
+    HAL_LOG_INFO("MENU", "TX delta → MQTT: %u bytes", (unsigned)out);
+}
+
 // ── Вспомогательная функция публикации конфига ────────────────────────────────
 // json — сырой JSON от RP2040: {v, full:true, vals:{...}}
 // Парсим его в g_menu_cache, затем собираем {v, menu:[...]} для портала.
@@ -273,17 +312,22 @@ static void onConfigChunk(const UartConfigChunkPayload& p, uint8_t dataLen,
     HAL_LOG_INFO("MENU", "chunk: dataLen=%u flags=0x%02X result=%d total=%u",
                  dataLen, hdr.flags, (int)result, s_configRx.getLength());
     if (result == ConfigFragResult::Complete) {
-        const uint16_t len = s_configRx.getLength();
-        const char* json = s_configRx.getJson();
+        const uint16_t len   = s_configRx.getLength();
+        const char*    json  = s_configRx.getJson();
+        const bool     delta = s_configRx.isDelta();
         // TODO(diag): убрать после стабилизации меню.
-        HAL_LOG_INFO("MENU", "RX from RP2040: %u bytes (capacity %u)",
-                     len, (unsigned)CONFIG_BUFFER_SIZE);
+        HAL_LOG_INFO("MENU", "RX from RP2040: %u bytes %s (capacity %u)",
+                     len, delta ? "DELTA" : "FULL", (unsigned)CONFIG_BUFFER_SIZE);
         HAL_LOG_INFO("MENU", "RX preview: %.200s%s", json ? json : "(null)",
                      (len > 200) ? "..." : "");
-        HAL_LOG_INFO("MENU", "heap before publishConfig: free=%u largest=%u",
-                     (unsigned)heap_caps_get_free_size(MALLOC_CAP_DEFAULT),
-                     (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT));
-        publishConfig(json, len);
+        if (delta) {
+            publishConfigDelta(json, len);
+        } else {
+            HAL_LOG_INFO("MENU", "heap before publishConfig: free=%u largest=%u",
+                         (unsigned)heap_caps_get_free_size(MALLOC_CAP_DEFAULT),
+                         (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT));
+            publishConfig(json, len);
+        }
         s_configRx.reset();
     }
 }
