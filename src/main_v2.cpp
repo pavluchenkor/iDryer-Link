@@ -12,6 +12,7 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <driver/gpio.h>
+#include "esp_heap_caps.h"
 
 #include <iDryer.h>
 #include <idryer_uart.h>
@@ -58,9 +59,9 @@ static hal::ArduinoSerial          s_uartSerial(Serial1, 1);
 static UartBridge                  s_uart;
 static ConfigReceiver              s_configRx;
 
-// Кэш последнего config JSON от RP2040 — переиздаётся при get_config и при онлайн.
-static char     s_lastConfig[CONFIG_BUFFER_SIZE];
-static uint16_t s_lastConfigLen = 0;
+// Кэша конфига нет: на сушилке значения меняются и через энкодер на железе,
+// ESP про это узнаёт не сразу — кэш отдавал бы устаревший snapshot. Всегда
+// перезапрашиваем у RP2040 (get_config / online-transition → requestConfig()).
 
 // Состояние для onlne-transition в every().
 static bool s_prevOnline = false;
@@ -70,38 +71,61 @@ static int  s_haDryTemp          = 60;
 static int  s_haDryTime          = 240;
 static bool s_haControlsReady    = false;
 
-// Статический буфер для полного меню JSON ({v, menu:[...]}).
-static char s_menuJson[MENU_FULL_JSON_BUF_SIZE];
+// Буфер для собранного меню выделяется на heap по требованию (publishConfig).
+// В .bss держать ~38 КБ нельзя — фрагментирует heap, ломает TLS-handshake mbedtls.
 
 // ── Вспомогательная функция публикации конфига ────────────────────────────────
 // json — сырой JSON от RP2040: {v, full:true, vals:{...}}
 // Парсим его в g_menu_cache, затем собираем {v, menu:[...]} для портала.
 static void publishConfig(const char* json, uint16_t len) {
-    if (!json || len == 0) return;
+    if (!json || len == 0) {
+        HAL_LOG_WARN("MENU", "publishConfig skipped: json=%p len=%u", json, len);
+        return;
+    }
 
     // Парсим vals из RP2040 → обновляем g_menu_cache
     if (!menu_parseFullConfig(json)) {
-        HAL_LOG_WARN("MENU", "parseFullConfig failed, publishing raw");
+        HAL_LOG_WARN("MENU", "parseFullConfig FAILED → publishing raw (%u bytes)", len);
         s_link.devicePublisher()->publishConfigRaw(json, len);
+        HAL_LOG_INFO("MENU", "TX raw → MQTT: %u bytes", len);
         return;
     }
+    HAL_LOG_INFO("MENU", "parseFullConfig OK (values cached)");
+
+    // Heap-alloc буфера на время сборки и публикации (после TLS уже подняли).
+    HAL_LOG_INFO("MENU", "malloc(%u): free=%u largest=%u",
+                 (unsigned)MENU_FULL_JSON_BUF_SIZE,
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_DEFAULT),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT));
+    char* menuJson = (char*)malloc(MENU_FULL_JSON_BUF_SIZE);
+    if (!menuJson) {
+        HAL_LOG_ERROR("MENU", "malloc(%u) FAILED → publishing raw (%u bytes)",
+                      (unsigned)MENU_FULL_JSON_BUF_SIZE, len);
+        s_link.devicePublisher()->publishConfigRaw(json, len);
+        HAL_LOG_INFO("MENU", "TX raw → MQTT: %u bytes", len);
+        return;
+    }
+    HAL_LOG_INFO("MENU", "malloc OK at %p", menuJson);
 
     // Собираем {v, menu:[...]} для портала
-    size_t menuLen = menu_buildFullJson(s_menuJson, sizeof(s_menuJson));
+    size_t menuLen = menu_buildFullJson(menuJson, MENU_FULL_JSON_BUF_SIZE);
+    HAL_LOG_INFO("MENU", "buildFullJson returned %u bytes", (unsigned)menuLen);
     if (menuLen == 0) {
-        HAL_LOG_WARN("MENU", "buildFullJson failed, publishing raw");
+        HAL_LOG_WARN("MENU", "buildFullJson FAILED → publishing raw (%u bytes)", len);
+        free(menuJson);
         s_link.devicePublisher()->publishConfigRaw(json, len);
+        HAL_LOG_INFO("MENU", "TX raw → MQTT: %u bytes", len);
         return;
     }
+    HAL_LOG_INFO("MENU", "TX preview: %.200s%s", menuJson,
+                 (menuLen > 200) ? "..." : "");
 
-    // Кэшируем собранный JSON (для get_config и online-transition)
-    if (menuLen < CONFIG_BUFFER_SIZE) {
-        memcpy(s_lastConfig, s_menuJson, menuLen);
-        s_lastConfig[menuLen] = '\0';
-        s_lastConfigLen = (uint16_t)menuLen;
-    }
-
-    s_link.devicePublisher()->publishConfigRaw(s_menuJson, menuLen);
+    s_link.devicePublisher()->publishConfigRaw(menuJson, menuLen);
+    HAL_LOG_INFO("MENU", "TX assembled → MQTT: %u bytes", (unsigned)menuLen);
+    free(menuJson);
+    HAL_LOG_INFO("MENU", "free done: heap free=%u largest=%u",
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_DEFAULT),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT));
 
     // При первом получении конфига регистрируем HA controls с реальными min/max из меню.
     if (!s_haControlsReady) {
@@ -245,9 +269,21 @@ static void onConfigChunk(const UartConfigChunkPayload& p, uint8_t dataLen,
                           const UartFrameHeader& hdr) {
     auto result = s_configRx.processFragment(p, dataLen, hdr.flags);
     s_uart.sendConfigAck(hdr.sequence);
+    // TODO(diag): убрать после стабилизации меню (chunk-by-chunk трассировка).
+    HAL_LOG_INFO("MENU", "chunk: dataLen=%u flags=0x%02X result=%d total=%u",
+                 dataLen, hdr.flags, (int)result, s_configRx.getLength());
     if (result == ConfigFragResult::Complete) {
-        HAL_LOG_INFO("UART", "Config received: %u bytes", s_configRx.getLength());
-        publishConfig(s_configRx.getJson(), s_configRx.getLength());
+        const uint16_t len = s_configRx.getLength();
+        const char* json = s_configRx.getJson();
+        // TODO(diag): убрать после стабилизации меню.
+        HAL_LOG_INFO("MENU", "RX from RP2040: %u bytes (capacity %u)",
+                     len, (unsigned)CONFIG_BUFFER_SIZE);
+        HAL_LOG_INFO("MENU", "RX preview: %.200s%s", json ? json : "(null)",
+                     (len > 200) ? "..." : "");
+        HAL_LOG_INFO("MENU", "heap before publishConfig: free=%u largest=%u",
+                     (unsigned)heap_caps_get_free_size(MALLOC_CAP_DEFAULT),
+                     (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT));
+        publishConfig(json, len);
         s_configRx.reset();
     }
 }
@@ -302,8 +338,9 @@ static uint8_t parseUnitId(JsonObjectConst data) {
 
 static void registerCommands() {
     s_link.onCommand("get_config", [](JsonObjectConst) {
-        if (s_lastConfigLen > 0)
-            s_link.devicePublisher()->publishConfigRaw(s_lastConfig, s_lastConfigLen);
+        // Без кэша: всегда тянем актуальные значения с RP2040 (энкодер может
+        // крутить пользователь на железе, ESP про это узнаёт только из ответа).
+        requestConfig();
     });
 
     s_link.onCommand("drying", [](JsonObjectConst data) {
@@ -430,17 +467,13 @@ static void registerCommands() {
         s_uart.sendHeartbeat(hb);
     });
 
-    // При выходе в онлайн: переиздаём кэш конфига или запрашиваем если нет.
+    // При выходе в онлайн запрашиваем конфиг у RP2040 (кэша нет — см. publishConfig).
     // RP2040 шлёт Hello только при своём старте — если ESP32 перезапустился позже,
     // Hello не придёт, запрашиваем GetConfig сами при первом online.
     s_link.every(2000, []() {
         const bool online = s_link.isOnline();
         if (online && !s_prevOnline) {
-            if (s_lastConfigLen > 0) {
-                s_link.devicePublisher()->publishConfigRaw(s_lastConfig, s_lastConfigLen);
-            } else {
-                requestConfig();
-            }
+            requestConfig();
         }
         s_prevOnline = online;
     });
