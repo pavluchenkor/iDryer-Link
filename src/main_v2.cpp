@@ -129,13 +129,13 @@ static void publishConfig(const char* json, uint16_t len) {
         HAL_LOG_INFO("MENU", "TX raw → MQTT: %u bytes", len);
         return;
     }
-    HAL_LOG_INFO("MENU", "parseFullConfig OK (values cached)");
+    // HAL_LOG_INFO("MENU", "parseFullConfig OK (values cached)");
 
     // Heap-alloc буфера на время сборки и публикации (после TLS уже подняли).
-    HAL_LOG_INFO("MENU", "malloc(%u): free=%u largest=%u",
-                 (unsigned)MENU_FULL_JSON_BUF_SIZE,
-                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_DEFAULT),
-                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT));
+    // HAL_LOG_INFO("MENU", "malloc(%u): free=%u largest=%u",
+    //              (unsigned)MENU_FULL_JSON_BUF_SIZE,
+    //              (unsigned)heap_caps_get_free_size(MALLOC_CAP_DEFAULT),
+    //              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT));
     char* menuJson = (char*)malloc(MENU_FULL_JSON_BUF_SIZE);
     if (!menuJson) {
         HAL_LOG_ERROR("MENU", "malloc(%u) FAILED → publishing raw (%u bytes)",
@@ -144,11 +144,11 @@ static void publishConfig(const char* json, uint16_t len) {
         HAL_LOG_INFO("MENU", "TX raw → MQTT: %u bytes", len);
         return;
     }
-    HAL_LOG_INFO("MENU", "malloc OK at %p", menuJson);
+    // HAL_LOG_INFO("MENU", "malloc OK at %p", menuJson);
 
     // Собираем {v, menu:[...]} для портала
     size_t menuLen = menu_buildFullJson(menuJson, MENU_FULL_JSON_BUF_SIZE);
-    HAL_LOG_INFO("MENU", "buildFullJson returned %u bytes", (unsigned)menuLen);
+    // HAL_LOG_INFO("MENU", "buildFullJson returned %u bytes", (unsigned)menuLen);
     if (menuLen == 0) {
         HAL_LOG_WARN("MENU", "buildFullJson FAILED → publishing raw (%u bytes)", len);
         free(menuJson);
@@ -156,15 +156,15 @@ static void publishConfig(const char* json, uint16_t len) {
         HAL_LOG_INFO("MENU", "TX raw → MQTT: %u bytes", len);
         return;
     }
-    HAL_LOG_INFO("MENU", "TX preview: %.200s%s", menuJson,
-                 (menuLen > 200) ? "..." : "");
+    // HAL_LOG_INFO("MENU", "TX preview: %.200s%s", menuJson,
+    //              (menuLen > 200) ? "..." : "");
 
     s_link.devicePublisher()->publishConfigRaw(menuJson, menuLen);
     HAL_LOG_INFO("MENU", "TX assembled → MQTT: %u bytes", (unsigned)menuLen);
     free(menuJson);
-    HAL_LOG_INFO("MENU", "free done: heap free=%u largest=%u",
-                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_DEFAULT),
-                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT));
+    // HAL_LOG_INFO("MENU", "free done: heap free=%u largest=%u",
+    //              (unsigned)heap_caps_get_free_size(MALLOC_CAP_DEFAULT),
+    //              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT));
 
     // При первом получении конфига регистрируем HA controls с реальными min/max из меню.
     if (!s_haControlsReady) {
@@ -308,24 +308,24 @@ static void onConfigChunk(const UartConfigChunkPayload& p, uint8_t dataLen,
                           const UartFrameHeader& hdr) {
     auto result = s_configRx.processFragment(p, dataLen, hdr.flags);
     s_uart.sendConfigAck(hdr.sequence);
-    // TODO(diag): убрать после стабилизации меню (chunk-by-chunk трассировка).
-    HAL_LOG_INFO("MENU", "chunk: dataLen=%u flags=0x%02X result=%d total=%u",
-                 dataLen, hdr.flags, (int)result, s_configRx.getLength());
+    // Diag (chunk-by-chunk): раскомментировать при отладке config-flow от RP2040.
+    // HAL_LOG_INFO("MENU", "chunk: dataLen=%u flags=0x%02X result=%d total=%u",
+    //              dataLen, hdr.flags, (int)result, s_configRx.getLength());
     if (result == ConfigFragResult::Complete) {
         const uint16_t len   = s_configRx.getLength();
         const char*    json  = s_configRx.getJson();
         const bool     delta = s_configRx.isDelta();
-        // TODO(diag): убрать после стабилизации меню.
-        HAL_LOG_INFO("MENU", "RX from RP2040: %u bytes %s (capacity %u)",
-                     len, delta ? "DELTA" : "FULL", (unsigned)CONFIG_BUFFER_SIZE);
-        HAL_LOG_INFO("MENU", "RX preview: %.200s%s", json ? json : "(null)",
-                     (len > 200) ? "..." : "");
+        // Diag (RX summary/preview/heap): раскомментировать при разборе проблем меню.
+        // HAL_LOG_INFO("MENU", "RX from RP2040: %u bytes %s (capacity %u)",
+        //              len, delta ? "DELTA" : "FULL", (unsigned)CONFIG_BUFFER_SIZE);
+        // HAL_LOG_INFO("MENU", "RX preview: %.200s%s", json ? json : "(null)",
+        //              (len > 200) ? "..." : "");
         if (delta) {
             publishConfigDelta(json, len);
         } else {
-            HAL_LOG_INFO("MENU", "heap before publishConfig: free=%u largest=%u",
-                         (unsigned)heap_caps_get_free_size(MALLOC_CAP_DEFAULT),
-                         (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT));
+            // HAL_LOG_INFO("MENU", "heap before publishConfig: free=%u largest=%u",
+            //              (unsigned)heap_caps_get_free_size(MALLOC_CAP_DEFAULT),
+            //              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT));
             publishConfig(json, len);
         }
         s_configRx.reset();
