@@ -6,7 +6,7 @@
 
 ### test_uart_rp2040_emulator.py
 **Назначение:** Эмулятор MCU (RP2040) для тестирования ESP32 без физического контроллера  
-**Протокол:** UART версии 1 (синхронизирован с lib/idryer-protocol)
+**Протокол:** UART версии 1 (синхронизирован с lib/idryer-core)
 
 **Запуск:**
 ```bash
@@ -173,4 +173,4 @@ python3 tools/test_uart_rp2040_emulator.py /dev/ttyUSB0
 | copy_firmware.py | ✅ Актуален | Build | Проверен |
 | copy_menu.py | ✅ Актуален | Build | Проверен |
 
-Все инструменты синхронизированы с текущим протоколом lib/idryer-protocol версии 1.
+Все инструменты синхронизированы с текущим протоколом lib/idryer-core версии 1.

@@ -1,6 +1,6 @@
 # Две ветки и два репозитория
 
-**Документация для разработчика стороннего устройства** (библиотека `idryer-protocol`, облако iDryer): [lib/idryer-protocol/docs/00-developer/01-your-product-in-idryer-cloud.md](../../lib/idryer-protocol/docs/00-developer/01-your-product-in-idryer-cloud.md). Справка по репозиторию Link: [docs/guide/README.md](../guide/README.md).
+**Документация для разработчика стороннего устройства** (библиотека `idryer-core`, облако iDryer): [lib/idryer-core/docs/ru/README.md](../../lib/idryer-core/docs/ru/README.md). Справка по репозиторию Link: [docs/guide/README.md](../guide/README.md).
 
 ---
 

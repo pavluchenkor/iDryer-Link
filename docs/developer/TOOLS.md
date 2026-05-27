@@ -1,6 +1,6 @@
 # Инструменты разработчика
 
-Все инструменты находятся в папке `tools/` и синхронизированы с протоколом lib/idryer-protocol версии 1.
+Все инструменты находятся в папке `tools/` и синхронизированы с протоколом lib/idryer-core версии 1.
 
 ## Быстрый старт
 
@@ -40,4 +40,4 @@ python3 tools/read_serial.py
 - **Поддержка всех MessageKind** — включая WebSocket, RFID Data, Error сообщения
 - **Interactive режим** — полноценное тестирование протокола с автоответами
 
-Все инструменты синхронизированы с исходным кодом lib/idryer-protocol/src/uart/uart_protocol.h
+Все инструменты синхронизированы с исходным кодом lib/idryer-core/src/uart/uart_protocol.h

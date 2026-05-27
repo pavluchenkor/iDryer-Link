@@ -1,418 +1,714 @@
-/**
- * @file main.cpp
- * @brief Главный файл iDryer Link (ESP32-C3)
- *
- * iDryer Link - сетевой мост между RP2040 контроллером и облаком.
- * Обеспечивает:
- * - WiFi подключение (через Improv Wi-Fi)
- * - MQTT коммуникацию с backend
- * - UART протокол с RP2040
- * - Claiming (привязка устройства через WebSerial)
- */
+// iDryer Link v2 — UART bridge RP2040↔Cloud на базе idryer-core SDK.
+//
+// Архитектура: RP2040 (контроллер) <—UART→ ESP32 (этот файл) <—WiFi/MQTT→ Портал
+//
+// iDryer::Link обеспечивает: WiFi/Improv, MQTT, claiming, LocalAccess, HA.
+// idryer::UartBridge парсит фреймы RP2040 и диспетчирует их в хэндлеры ниже.
+// Телеметрия/статус из UART записываются в s_link.telemetry / s_link.status
+// и периодически публикуются библиотекой.
+// Команды портала (drying/stop/storage) транслируются в UartCmdPayload → RP2040.
+// Конфиг (меню) приходит от RP2040 чанками → переиздаётся на MQTT retained.
 
 #include <Arduino.h>
-#include <idryer_protocol.h>
-#include <platform/arduino/idryer_arduino.h>
-#include "IdryerDevice.h"
-#include "WsServer.h"
-#include <ArduinoJson.h>
-#include <ImprovWiFiLibrary.h>
-#include <Preferences.h>
+#include <WiFi.h>
+#include <driver/gpio.h>
+#include <mbedtls/base64.h>
+#include "esp_heap_caps.h"
 
-// Menu библиотека для кэширования конфига
-#include <menu_commands.h>
-#include <menu_cache.h>
-#include <menu_meta.h>
+#include <iDryer.h>
+#include <idryer_uart.h>
+#include <idryer_integrations.h>
+#include <config/config_manager.h>
+#include <hal/hal_arduino.h>
+#include <local_access/device_publisher.h>
 
-#include "secrets.h"
 #include "version.h"
 
-using namespace DryerUart;
+#include <menu_commands.h>
+#include <menu_cache.h>
+
 using namespace idryer;
-using namespace idryer::hal;
 
-// =============================================================================
-// DEBUG МАКРОСЫ (runtime-условные, зависят от logsEnabled)
-// =============================================================================
+// ── Пины UART (ESP32-C3 Super Mini, JTAG-shared → требуют gpio_reset_pin) ──
+constexpr int UART_RX_PIN = 6;
+constexpr int UART_TX_PIN = 7;
 
-#define ANSI_RESET "\033[0m"
-#define ANSI_GREEN "\033[32m"
+// ── SDK объекты ──────────────────────────────────────────────────────────────
+static const iDryer::Config CFG = {
+    .deviceType        = iDryer::DeviceType::Dryer,
+    .unitsCount        = 1,  // реальное число физических юнитов на этом железе; уточняется из Hello RP2040
+    .hasHeaterPower    = true,
+    .hasFanStatus      = true,
+    .hasLed            = false,
+    .hasScales         = true,
+    .hasRfid           = true,
+    .hasAirTemp        = true,
+    .hasAirHumidity    = true,
+    .hasHeaterTemp     = false,
+    .allowHa           = true,
+    .allowBambu        = false,
+    .allowMoonraker    = false,
+    .telemetryPeriodMs = 5000,
+    .statusPeriodMs    = 10000,
+    .hardwareVersion   = "DRYER-v3",
+    .firmwareVersion   = VERSION_STR,
+    .model             = "iDryer",
+};
 
-#define DEBUG_LOG(...)                  \
-    do                                  \
-    {                                   \
-        if (logsEnabled)                \
-            Serial.printf(__VA_ARGS__); \
-    } while (0)
+static iDryer::Link                s_link(CFG);
+static hal::ArduinoSerial          s_uartSerial(Serial1, 1);
+static UartBridge                  s_uart;
+static ConfigReceiver              s_configRx;
 
-namespace
-{
-    // ESP32-C3 UART пины для связи с RP2040
-    constexpr int UART_RX_PIN = 6;
-    constexpr int UART_TX_PIN = 7;
+// Кэша конфига нет: на сушилке значения меняются и через энкодер на железе,
+// ESP про это узнаёт не сразу — кэш отдавал бы устаревший snapshot. Всегда
+// перезапрашиваем у RP2040 (get_config / online-transition → requestConfig()).
 
-    // Improv Wi-Fi (настройка WiFi через браузер)
-    Preferences preferences;
-    ImprovWiFi improvSerial(&Serial);
-    bool wifiConfigured = false;
-    bool logsEnabled = false; // Логи включаются после настройки WiFi (Serial освобождается от Improv)
+// Состояние для onlne-transition в every().
+static bool s_prevOnline = false;
 
-    // =========================================================================
-    // WiFi credentials (Improv + NVS)
-    // =========================================================================
+// HA controls state — температура и время для команды drying из HA.
+static int  s_haDryTemp          = 60;
+static int  s_haDryTime          = 240;
+static bool s_haControlsReady    = false;
 
-    void saveWiFiCredentials(const char *ssid, const char *password)
-    {
-        preferences.begin("wifi", false);
-        preferences.putString("ssid", ssid);
-        preferences.putString("password", password);
-        preferences.putBool("configured", true);
-        preferences.end();
-        DEBUG_LOG("[IMPROV] WiFi credentials saved\n");
+// Буфер для собранного меню выделяется на heap по требованию (publishConfig).
+// В .bss держать ~38 КБ нельзя — фрагментирует heap, ломает TLS-handshake mbedtls.
+
+// ── Публикация delta (один-несколько изменённых пунктов) ─────────────────────
+// json — сырой delta от RP2040: {"rev":N,"vals":{"7":[50]}}
+// Используется когда ConfigReceiver::isDelta() (старший бит transferId).
+// Канон в mqtt_contract.yaml (config_delta): {"rev":N,"d":{"7":[50]}} —
+// поле 'd' вместо 'vals'. Перепаковываем перед publish.
+static void publishConfigDelta(const char* json, uint16_t len) {
+    if (!json || len == 0) return;
+
+    // Обновляем g_menu_cache (для local-WS клиентов и других потребителей).
+    if (!menu_parseDelta(json)) {
+        HAL_LOG_WARN("MENU", "parseDelta FAILED, dropping (%u bytes)", len);
+        return;
     }
 
-    bool loadWiFiCredentials(String &ssid, String &password)
-    {
-        preferences.begin("wifi", true);
-        bool configured = preferences.getBool("configured", false);
-        if (configured)
-        {
-            ssid = preferences.getString("ssid", "");
-            password = preferences.getString("password", "");
-        }
-        preferences.end();
-        return configured && ssid.length() > 0;
+    // Парсим RP2040-формат и переименовываем "vals" → "d". 512 байт capacity
+    // хватает на 1–3 изменённых per-unit пункта; на стеке.
+    StaticJsonDocument<512> doc;
+    if (deserializeJson(doc, json, len)) {
+        HAL_LOG_WARN("MENU", "delta deserialize FAILED (%u bytes)", len);
+        return;
+    }
+    if (!doc.containsKey("vals")) {
+        HAL_LOG_WARN("MENU", "delta missing 'vals' key, dropping");
+        return;
+    }
+    doc["d"] = doc["vals"];
+    doc.remove("vals");
+
+    char buf[256];
+    size_t out = serializeJson(doc, buf, sizeof(buf));
+    if (out == 0) {
+        HAL_LOG_WARN("MENU", "delta reserialize FAILED");
+        return;
     }
 
-    // =============================================================================
-    // ГЛОБАЛЬНЫЕ ОБЪЕКТЫ
-    // =============================================================================
-
-    // HAL Serial для UART (ESP32-C3: Serial1 = UART_NUM_1)
-    ArduinoSerial uartSerial(Serial1, 1);
-    UartBridge uartBridge;
-
-    // Платформенные реализации
-    ArduinoWifiManager wifiManager;
-    ArduinoHttpClient httpClient;
-    ArduinoCredentialStore credStore;
-
-    // Главный фасад устройства
-    IdryerDevice device(&wifiManager, &httpClient, &credStore, &uartBridge, IDRYER_API_BASE);
-
-    // WebSocket сервер для локального доступа
-    WsServer wsServer(&uartBridge);
-
-    void onImprovWiFiConnectCallback(const char *ssid, const char *password)
-    {
-        DEBUG_LOG("[IMPROV] Received credentials - SSID: %s\n", ssid);
-        saveWiFiCredentials(ssid, password);
-        wifiManager.begin(ssid, password);
-        wifiConfigured = true;
-    }
-
-    void onImprovWiFiErrorCallback(ImprovTypes::Error err)
-    {
-        DEBUG_LOG("[IMPROV] Error: %d\n", err);
-    }
-
-    // =============================================================================
-    // WEBSERIAL CLAIMING (для веб-морды install.idryer.org)
-    // =============================================================================
-
-    char currentClaimPin[10] = "";
-    uint32_t claimPinExpiresIn = 0;
-
-    /**
-     * @brief Callback когда получен PIN от backend
-     *
-     * PIN выводится в Serial для веб-морды в формате: CLAIM_PIN:<pin>:<expires>
-     * Отправка PIN на RP2040 происходит автоматически внутри библиотеки.
-     */
-    void onWebClaimPin(const char *pin, uint32_t expiresInSeconds)
-    {
-        strncpy(currentClaimPin, pin, sizeof(currentClaimPin) - 1);
-        currentClaimPin[sizeof(currentClaimPin) - 1] = '\0';
-        claimPinExpiresIn = expiresInSeconds;
-
-        // Выводим PIN в Serial для веб-морды
-        Serial.print("CLAIM_PIN:");
-        Serial.print(pin);
-        Serial.print(":");
-        Serial.println(expiresInSeconds);
-        Serial.flush();
-
-        DEBUG_LOG("[WEB_CLAIM] PIN sent to Serial: %s (expires in %ds)\n", pin, expiresInSeconds);
-    }
-
-    /**
-     * @brief Обработчик команды START_CLAIM от веб-морды
-     */
-    void handleWebSerialCommand(const String &line)
-    {
-        if (line.equalsIgnoreCase("START_CLAIM"))
-        {
-            DEBUG_LOG("[WEB_CLAIM] Received START_CLAIM command from web\n");
-
-            bool result = device.requestClaimProcess();
-
-            if (result)
-            {
-                auto *csm = device.getCloudStateMachine();
-                if (csm && csm->getState() == cloud::CloudState::Ready)
-                {
-                    const char *serial = csm->getIdentity().serialNumber;
-                    Serial.printf("CLAIM_ALREADY:%s\n", serial);
-                    DEBUG_LOG("[WEB_CLAIM] Device already claimed, serial=%s\n", serial);
-                }
-                else
-                {
-                    Serial.println("CLAIM_STARTED:OK");
-                    DEBUG_LOG("[WEB_CLAIM] Claim process started successfully\n");
-                }
-            }
-            else
-            {
-                Serial.println("CLAIM_STARTED:ERROR");
-                DEBUG_LOG("[WEB_CLAIM] Failed to start claim process\n");
-            }
-            Serial.flush();
-        }
-    }
-
-    /**
-     * @brief Чтение и обработка команд из Serial (для веб-морды)
-     */
-    void processWebSerialCommands()
-    {
-        if (!logsEnabled)
-            return;
-
-        if (Serial.available() > 0)
-        {
-            String line = Serial.readStringUntil('\n');
-            line.trim();
-
-            if (line.length() > 0)
-            {
-                handleWebSerialCommand(line);
-            }
-        }
-    }
-
-    // =============================================================================
-    // MENU CONFIG CALLBACK
-    // =============================================================================
-
-    void printMenuItem(uint16_t id, int depth)
-    {
-        const MenuMeta *meta = menu_meta_get(id);
-        if (!meta)
-            return;
-
-        for (int i = 0; i < depth; i++)
-            DEBUG_LOG("  ");
-
-        uint8_t lang = g_menu_cache.getLang();
-        const char *name = meta->title[lang] ? meta->title[lang] : "?";
-        const char *unit = meta->unit[lang] ? meta->unit[lang] : "";
-
-        switch (meta->type)
-        {
-        case META_SUBMENU:
-            DEBUG_LOG("[%s]\n", name);
-            for (uint16_t childId = 0; childId < MENU_META_COUNT; childId++)
-            {
-                const MenuMeta *child = menu_meta_get(childId);
-                if (child && child->parent == (int16_t)id)
-                {
-                    printMenuItem(childId, depth + 1);
-                }
-            }
-            break;
-
-        case META_ACTION:
-            DEBUG_LOG("%s (action)\n", name);
-            break;
-
-        case META_VALUE:
-        case META_TOGGLE:
-            if (meta->scope == META_SCOPE_GLOBAL)
-            {
-                if (meta->type == META_TOGGLE)
-                {
-                    DEBUG_LOG("%s = %s\n", name,
-                              g_menu_cache.getBool(id, 0) ? "ON" : "OFF");
-                }
-                else
-                {
-                    DEBUG_LOG("%s = %.1f %s\n", name,
-                              g_menu_cache.getFloat(id, 0), unit);
-                }
-            }
-            else
-            {
-                DEBUG_LOG("%s = [", name);
-                for (uint8_t u = 0; u < g_menu_cache.getUnitsCount(); u++)
-                {
-                    if (u > 0)
-                        DEBUG_LOG(", ");
-                    if (meta->type == META_TOGGLE)
-                    {
-                        DEBUG_LOG("%s", g_menu_cache.getBool(id, u) ? "ON" : "OFF");
-                    }
-                    else
-                    {
-                        DEBUG_LOG("%.1f", g_menu_cache.getFloat(id, u));
-                    }
-                }
-                DEBUG_LOG("] %s\n", unit);
-            }
-            break;
-        }
-    }
-
-    void printMenuCache()
-    {
-        DEBUG_LOG("\n--- MENU CACHE ---\n");
-        DEBUG_LOG("Version: %d, Units: %d, Active: %d, Lang: %s\n\n",
-                  g_menu_cache.revision,
-                  g_menu_cache.getUnitsCount(),
-                  g_menu_cache.active_unit,
-                  g_menu_cache.getLang() == 0 ? "RU" : "EN");
-
-        printMenuItem(0, 0);
-
-        DEBUG_LOG("------------------\n");
-    }
-
-    void onConfigReceived(const char *json, uint16_t length, bool isDelta)
-    {
-        DEBUG_LOG("\n" ANSI_GREEN "← Config received: %d bytes, isDelta=%d" ANSI_RESET "\n",
-                  length, isDelta);
-
-        bool ok = false;
-        if (isDelta)
-        {
-            ok = menu_parseDelta(json);
-            DEBUG_LOG("[MENU] Delta parsed: %s\n", ok ? "OK" : "FAIL");
-        }
-        else
-        {
-            ok = menu_parseFullConfig(json);
-            DEBUG_LOG("[MENU] Full config parsed: %s, units=%d, active=%d\n",
-                      ok ? "OK" : "FAIL",
-                      g_menu_cache.getUnitsCount(),
-                      g_menu_cache.active_unit);
-        }
-
-        if (ok)
-        {
-            printMenuCache();
-        }
-    }
-
-} // namespace
-
-void setup()
-{
-    Serial.begin(115200);
-
-    initArduinoHal(nullptr);
-    // Отключаем JTAG для использования GPIO6/7
-    gpio_reset_pin((gpio_num_t)UART_RX_PIN);
-    gpio_reset_pin((gpio_num_t)UART_TX_PIN);
-
-    // Инициализируем UART1 для связи с RP2040
-    Serial1.begin(115200, SERIAL_8N1, UART_RX_PIN, UART_TX_PIN);
-
-    // Инициализируем UART Bridge
-    uartBridge.begin(&uartSerial, 115200);
-
-    // Инициализация Improv Wi-Fi
-    improvSerial.setDeviceInfo(
-        ImprovTypes::ChipFamily::CF_ESP32_C3,
-        "iDryer Link",
-        VERSION_STRING,
-        "iDryer",
-        "");
-
-    improvSerial.onImprovConnected(onImprovWiFiConnectCallback);
-    improvSerial.onImprovError(onImprovWiFiErrorCallback);
-
-    // Проверяем, есть ли сохранённые WiFi credentials
-    String savedSSID, savedPassword;
-    if (loadWiFiCredentials(savedSSID, savedPassword))
-    {
-        wifiManager.begin(savedSSID.c_str(), savedPassword.c_str());
-        wifiConfigured = true;
-    }
-#if defined(IDRYER_WIFI_SSID) && defined(IDRYER_WIFI_PASSWORD)
-    else
-    {
-        wifiManager.begin(IDRYER_WIFI_SSID, IDRYER_WIFI_PASSWORD);
-        saveWiFiCredentials(IDRYER_WIFI_SSID, IDRYER_WIFI_PASSWORD);
-        wifiConfigured = true;
-    }
-#endif
-
-    // device.begin() регистрирует все UART обработчики и запускает облачную логику
-    device.begin();
-
-    // Подключаем WS сервер к фасаду (WS активируется позже по UART команде WsEnable)
-    device.setWsServer(&wsServer);
-
-    // WS команды идут через тот же CommandHandler что и MQTT
-    wsServer.setCommandCallback([](const char *command, JsonObjectConst data)
-                                { device.handleExternalCommand(command, data); });
-
-    // Callback для получения конфига от MCU
-    device.setConfigReceivedCallback(onConfigReceived);
-
-    // Callback для получения PIN (WebSerial claiming)
-    device.setClaimPinCallback(onWebClaimPin);
-
-    // Авто-refresh deviceToken при WS invalid_token:
-    // ESP32 делает re-provision на портал и получает актуальный токен.
-    // Приложение параллельно делает retry через ~2-3 сек — к тому времени токен обновлён.
-    wsServer.setTokenRefreshCallback([&]()
-                                     {
-        auto* csm = device.getCloudStateMachine();
-        if (!csm) return;
-        HAL_LOG_INFO("DEVICE", "WS auth fail → auto-refreshing token from portal...");
-        if (csm->refreshToken()) {
-            wsServer.updateToken(csm->getIdentity().token);
-            HAL_LOG_INFO("DEVICE", "WS token auto-refreshed OK");
-        } else {
-            HAL_LOG_WARN("DEVICE", "WS token refresh failed (no WiFi, no serial, or cooldown)");
-        } });
+    s_link.devicePublisher()->publishConfigDelta(buf, out);
+    HAL_LOG_INFO("MENU", "TX delta → MQTT: %u bytes", (unsigned)out);
 }
 
-void loop()
-{
-    device.loop(); // UART + heartbeat + cloud + публикация данных
-
-    // Improv работает пока WiFi не настроен
-    if (!logsEnabled)
-    {
-        improvSerial.handleSerial();
-
-        // После подключения к WiFi — Serial свободен для логов и WebSerial команд
-        if (wifiConfigured && WiFi.status() == WL_CONNECTED)
-        {
-            logsEnabled = true;
-            initArduinoHal(&Serial);
-            Serial.println("\n========================================");
-            Serial.printf("[BOOT] FW=%s  UART_PROTO=%d\n", VERSION_STR, DryerUart::PROTOCOL_VERSION);
-            Serial.println("[BOOT] Logs enabled after WiFi config");
-            Serial.println("========================================");
-            HAL_LOG_INFO("CLOUD", "WiFi connected, logs enabled");
-            HAL_LOG_INFO("CLOUD", "WiFi connected, IP: %s, RSSI: %d dBm",
-                         WiFi.localIP().toString().c_str(), WiFi.RSSI());
-        }
+// ── Вспомогательная функция публикации конфига ────────────────────────────────
+// json — сырой JSON от RP2040: {v, full:true, vals:{...}}
+// Парсим его в g_menu_cache, затем собираем {v, menu:[...]} для портала.
+static void publishConfig(const char* json, uint16_t len) {
+    if (!json || len == 0) {
+        HAL_LOG_WARN("MENU", "publishConfig skipped: json=%p len=%u", json, len);
+        return;
     }
-    else
-    {
-        processWebSerialCommands();
+
+    // Парсим vals из RP2040 → обновляем g_menu_cache
+    if (!menu_parseFullConfig(json)) {
+        HAL_LOG_WARN("MENU", "parseFullConfig FAILED → publishing raw (%u bytes)", len);
+        s_link.devicePublisher()->publishConfigRaw(json, len);
+        HAL_LOG_INFO("MENU", "TX raw → MQTT: %u bytes", len);
+        return;
+    }
+    // HAL_LOG_INFO("MENU", "parseFullConfig OK (values cached)");
+
+    // Heap-alloc буфера на время сборки и публикации (после TLS уже подняли).
+    // HAL_LOG_INFO("MENU", "malloc(%u): free=%u largest=%u",
+    //              (unsigned)MENU_FULL_JSON_BUF_SIZE,
+    //              (unsigned)heap_caps_get_free_size(MALLOC_CAP_DEFAULT),
+    //              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT));
+    char* menuJson = (char*)malloc(MENU_FULL_JSON_BUF_SIZE);
+    if (!menuJson) {
+        HAL_LOG_ERROR("MENU", "malloc(%u) FAILED → publishing raw (%u bytes)",
+                      (unsigned)MENU_FULL_JSON_BUF_SIZE, len);
+        s_link.devicePublisher()->publishConfigRaw(json, len);
+        HAL_LOG_INFO("MENU", "TX raw → MQTT: %u bytes", len);
+        return;
+    }
+    // HAL_LOG_INFO("MENU", "malloc OK at %p", menuJson);
+
+    // Собираем {v, menu:[...]} для портала
+    size_t menuLen = menu_buildFullJson(menuJson, MENU_FULL_JSON_BUF_SIZE);
+    // HAL_LOG_INFO("MENU", "buildFullJson returned %u bytes", (unsigned)menuLen);
+    if (menuLen == 0) {
+        HAL_LOG_WARN("MENU", "buildFullJson FAILED → publishing raw (%u bytes)", len);
+        free(menuJson);
+        s_link.devicePublisher()->publishConfigRaw(json, len);
+        HAL_LOG_INFO("MENU", "TX raw → MQTT: %u bytes", len);
+        return;
+    }
+    // HAL_LOG_INFO("MENU", "TX preview: %.200s%s", menuJson,
+    //              (menuLen > 200) ? "..." : "");
+
+    s_link.devicePublisher()->publishConfigRaw(menuJson, menuLen);
+    HAL_LOG_INFO("MENU", "TX assembled → MQTT: %u bytes", (unsigned)menuLen);
+    free(menuJson);
+    // HAL_LOG_INFO("MENU", "free done: heap free=%u largest=%u",
+    //              (unsigned)heap_caps_get_free_size(MALLOC_CAP_DEFAULT),
+    //              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT));
+
+    // При первом получении конфига регистрируем HA controls с реальными min/max из меню.
+    if (!s_haControlsReady) {
+        s_haControlsReady = true;
+        int tempMin = (int)g_menu_meta[3].min_val;
+        int tempMax = (int)g_menu_meta[3].max_val;
+        int timeMin = (int)g_menu_meta[4].min_val;
+        int timeMax = (int)g_menu_meta[4].max_val;
+        s_haDryTemp = (int)g_menu_cache.getFloat(3);
+        s_haDryTime = (int)g_menu_cache.getFloat(4);
+
+        auto& ha = s_link.ha();
+        ha.number("dry_temp", "Drying temperature", tempMin, tempMax,
+                  [](int v) { s_haDryTemp = v; }, "°C", "mdi:thermometer-plus");
+        ha.number("dry_time", "Drying duration", timeMin, timeMax,
+                  [](int v) { s_haDryTime = v; }, "min", "mdi:timer-outline");
+        ha.button("start_drying", "Start drying", []() {
+            UartCmdPayload cmd{};
+            cmd.command     = UartCmdCode::Start;
+            cmd.targetState = (uint8_t)UartDryerMode::Drying;
+            cmd.unitId      = 0;
+            cmd.arg0        = (uint32_t)(s_haDryTemp * 10);
+            cmd.arg1        = (uint32_t)s_haDryTime;
+            s_uart.sendCommand(cmd);
+        }, "mdi:play-circle");
+        ha.button("start_storage", "Start storage", []() {
+            UartCmdPayload cmd{};
+            cmd.command     = UartCmdCode::Start;
+            cmd.targetState = (uint8_t)UartDryerMode::Storage;
+            cmd.unitId      = 0;
+            cmd.arg0        = (uint32_t)((int)g_menu_meta[7].min_val * 10);
+            cmd.arg1        = (uint32_t)g_menu_meta[8].min_val;
+            s_uart.sendCommand(cmd);
+        }, "mdi:archive");
+        ha.button("stop", "Stop", []() {
+            UartCmdPayload cmd{};
+            cmd.command = UartCmdCode::Stop;
+            cmd.unitId  = 0;
+            s_uart.sendCommand(cmd);
+        }, "mdi:stop-circle");
+
+        s_link.ha().republishAll();
+    }
+}
+
+// Публикует результат write_rfid в MQTT топик rfid/write_result.
+// commandId эхо из запроса портала — портал по нему сопоставит ответ.
+// status: "ok" | "failed". error: текст ошибки только для failed.
+static void publishWriteResult(const char* commandId, const char* status, const char* error) {
+    StaticJsonDocument<192> doc;
+    doc["commandId"] = commandId ? commandId : "";
+    doc["status"]    = status;
+    if (error && *error) doc["error"] = error;
+    s_link.devicePublisher()->publishRfidWriteResult(doc);
+}
+
+// ── Маппинг UartDryerMode → iDryer::UnitMode ─────────────────────────────────
+static iDryer::UnitMode modeFromUart(UartDryerMode m) {
+    switch (m) {
+        case UartDryerMode::Drying:  return iDryer::UnitMode::Drying;
+        case UartDryerMode::Storage: return iDryer::UnitMode::Storage;
+        case UartDryerMode::Profile: return iDryer::UnitMode::Profile;
+        case UartDryerMode::Fault:   return iDryer::UnitMode::Fault;
+        default:                     return iDryer::UnitMode::Idle;
+    }
+}
+
+// ── UART handlers (RP2040 → ESP32) ────────────────────────────────────────────
+
+static bool s_mcuConnected = false;
+
+static void requestConfig() {
+    UartCmdPayload cmd{};
+    cmd.command = UartCmdCode::GetConfig;
+    cmd.unitId  = 0;  // 0xFF rejected by RP2040 (unitId >= NUM_UNITS check)
+    s_uart.sendCommand(cmd, false);
+}
+
+static void onHello(const UartHelloPayload& p, const UartFrameHeader&) {
+    HAL_LOG_INFO("UART", "Hello: type=%u fw=%u units=%u serial=%s",
+                 p.deviceType, p.firmwareVersion, p.unitsCount, p.mcuSerial);
+
+    // Always ack Hello to give RP2040 connection info (IP/SSID).
+    UartHelloAckPayload ack{};
+    ack.ipAddress = (uint32_t)WiFi.localIP();
+    strncpy(ack.ssid, WiFi.SSID().c_str(), sizeof(ack.ssid) - 1);
+    s_uart.sendHelloAck(ack);
+    s_mcuConnected = true;
+
+    // Pass mcuSerial to cloud layer first — must happen before setUnitsCount
+    // and publishInfoNow so that buildInfoJson() picks up the correct mcuSerial.
+    auto result = s_link.setMcuSerial(p.mcuSerial);
+    s_link.setMcuFirmwareVersion(p.firmwareVersion);
+
+    if (result == iDryer::McuSerialResult::Mismatch) {
+        // Different RP2040 connected — signal error to controller via UART.
+        // Cloud layer does not touch UART; product code handles the signal here.
+        UartClaimStatusPayload sp{};
+        sp.status = UartClaimStatus::Error;
+        s_uart.sendClaimStatus(sp);
+        return;
+    }
+
+    if (result == iDryer::McuSerialResult::Ignored) {
+        HAL_LOG_WARN("UART", "Hello mcuSerial empty, waiting for valid Hello");
+        return;
+    }
+
+    // mcuSerial accepted (AcceptedFirstBind or AcceptedBound) — proceed.
+    if (p.unitsCount >= 1 && p.unitsCount <= iDryer::MAX_UNITS) {
+        s_link.setUnitsCount(p.unitsCount);
+        s_link.publishInfoNow(); // info now contains correct mcuSerial
+    }
+
+    requestConfig();
+}
+
+static void onTelemetry(const UartTelemetryPayload& p, const UartFrameHeader& hdr) {
+    for (uint8_t i = 0; i < p.count && i < iDryer::MAX_UNITS; i++) {
+        const auto& e = p.units[i];
+        if (e.unitId >= iDryer::MAX_UNITS) continue;
+        s_link.telemetry.airTempC[e.unitId]      = e.temperatureC10  / 10.0f;
+        s_link.telemetry.airHumidityPct[e.unitId]= e.humidityPct10   / 10.0f;
+        s_link.telemetry.heaterPower01[e.unitId] = e.heaterPowerPct  / 100.0f;
+        s_link.telemetry.fanOn[e.unitId]         = (e.fanOn != 0);
+    }
+    s_uart.sendTelemetryAck(hdr.sequence);
+}
+
+static void onStatus(const UartStatusPayload& p, const UartFrameHeader&) {
+    for (uint8_t i = 0; i < p.count && i < iDryer::MAX_UNITS; i++) {
+        const auto& e = p.units[i];
+        if (e.unitId >= iDryer::MAX_UNITS) continue;
+        s_link.status.mode[e.unitId]       = modeFromUart((UartDryerMode)e.mode);
+        s_link.status.targetTempC[e.unitId]= e.targetTempC10 / 10.0f;
+        s_link.status.durationS[e.unitId]  = (uint32_t)e.durationMinutes * 60u;
+        s_link.status.elapsedS[e.unitId]   = e.elapsedSeconds;
+    }
+    s_link.publishStatusNow();
+}
+
+static void onWeights(const UartWeightsPayload& p, const UartFrameHeader&) {
+    for (uint8_t i = 0; i < p.count && i < iDryer::MAX_UNITS; i++) {
+        const auto& w = p.weights[i];
+        if (w.unitId < iDryer::MAX_UNITS)
+            s_link.telemetry.weightG[w.unitId] = w.weightGramsC10 / 10u;
+    }
+}
+
+// RP2040 шлёт JSON меню фрагментами. ConfigReceiver склеивает, потом публикуем.
+static void onConfigChunk(const UartConfigChunkPayload& p, uint8_t dataLen,
+                          const UartFrameHeader& hdr) {
+    auto result = s_configRx.processFragment(p, dataLen, hdr.flags);
+    s_uart.sendConfigAck(hdr.sequence);
+    // Diag (chunk-by-chunk): раскомментировать при отладке config-flow от RP2040.
+    // HAL_LOG_INFO("MENU", "chunk: dataLen=%u flags=0x%02X result=%d total=%u",
+    //              dataLen, hdr.flags, (int)result, s_configRx.getLength());
+    if (result == ConfigFragResult::Complete) {
+        const uint16_t len   = s_configRx.getLength();
+        const char*    json  = s_configRx.getJson();
+        const bool     delta = s_configRx.isDelta();
+        // Diag (RX summary/preview/heap): раскомментировать при разборе проблем меню.
+        // HAL_LOG_INFO("MENU", "RX from RP2040: %u bytes %s (capacity %u)",
+        //              len, delta ? "DELTA" : "FULL", (unsigned)CONFIG_BUFFER_SIZE);
+        // HAL_LOG_INFO("MENU", "RX preview: %.200s%s", json ? json : "(null)",
+        //              (len > 200) ? "..." : "");
+        if (delta) {
+            publishConfigDelta(json, len);
+        } else {
+            // HAL_LOG_INFO("MENU", "heap before publishConfig: free=%u largest=%u",
+            //              (unsigned)heap_caps_get_free_size(MALLOC_CAP_DEFAULT),
+            //              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT));
+            publishConfig(json, len);
+        }
+        s_configRx.reset();
+    }
+}
+
+static void onLog(const uint8_t* payload, uint8_t length) {
+    if (length < sizeof(idryer::UartLogPayload)) return;
+    const auto* log = reinterpret_cast<const idryer::UartLogPayload*>(payload);
+
+    HAL_LOG_INFO("UART", "Log[%s] %s/%s: %s (U%u)",
+                 log->severity, log->source, log->event, log->message, log->unitId + 1);
+
+    // Строим JSON вручную, чтобы сохранить все поля:
+    // severity (CRIT/ERROR/WARN/INFO), source (SHT31/HEATER/...), event, message, unitId.
+    // raiseEvent() не использем — оно теряет source и деградирует CRIT→ERROR.
+    StaticJsonDocument<256> doc;
+    doc["severity"] = log->severity;   // "CRIT" | "ERROR" | "WARN" | "INFO"
+    doc["source"]   = log->source;     // "SHT31" | "THERMISTOR" | "HEATER" | ...
+    doc["event"]    = log->event;      // "NO_RESPONSE" | "OVER_MAX" | ...
+    doc["message"]  = log->message;    // human-readable
+
+    char uid[4];
+    if (log->unitId < iDryer::MAX_UNITS) {
+        snprintf(uid, sizeof(uid), "U%u", log->unitId + 1);
+        doc["unitId"] = uid;
+    } else {
+        doc["unitId"] = "DEVICE";
+    }
+
+    s_link.devicePublisher()->publishEvent(doc);
+}
+
+static void onClaimStart(const UartFrameHeader&) {
+    HAL_LOG_INFO("UART", "ClaimStart from MCU");
+    s_link.requestClaim();
+}
+
+static void onUartError(const UartErrorPayload& p, bool remote) {
+    HAL_LOG_WARN("UART", "error code=%u remote=%d", (uint8_t)p.code, remote);
+}
+
+// ── Портальные команды (портал → ESP32 → RP2040) ─────────────────────────────
+
+// Парсит unitId вида "U1".."U4" → индекс 0..3. Возвращает 0xFF если не распознан.
+static uint8_t parseUnitId(JsonObjectConst data) {
+    JsonVariantConst v = data["unitId"];
+    if (v.is<const char*>()) {
+        const char* s = v.as<const char*>();
+        if (s && s[0] == 'U' && s[1] >= '1' && s[1] <= '4') return (uint8_t)(s[1] - '1');
+    }
+    return 0xFF;
+}
+
+static void registerCommands() {
+    s_link.onCommand("get_config", [](JsonObjectConst) {
+        // Без кэша: всегда тянем актуальные значения с RP2040 (энкодер может
+        // крутить пользователь на железе, ESP про это узнаёт только из ответа).
+        requestConfig();
+    });
+
+    s_link.onCommand("drying", [](JsonObjectConst data) {
+        UartCmdPayload cmd{};
+        cmd.command     = UartCmdCode::Start;
+        cmd.targetState = (uint8_t)UartDryerMode::Drying;
+        cmd.unitId      = parseUnitId(data);
+        JsonObjectConst params = data["params"];
+        cmd.arg0        = (uint32_t)(params["temperature"].as<int>() * 10);
+        cmd.arg1        = (uint32_t)params["duration"].as<int>();
+        s_uart.sendCommand(cmd);
+    });
+
+    s_link.onCommand("stop", [](JsonObjectConst data) {
+        UartCmdPayload cmd{};
+        cmd.command = UartCmdCode::Stop;
+        cmd.unitId  = parseUnitId(data);
+        s_uart.sendCommand(cmd);
+    });
+
+    s_link.onCommand("find", [](JsonObjectConst data) {
+        UartCmdPayload cmd{};
+        cmd.command = UartCmdCode::Find;
+        cmd.unitId  = parseUnitId(data);
+        s_uart.sendCommand(cmd);
+    });
+
+    s_link.onCommand("clear_errors", [](JsonObjectConst data) {
+        // Бэкенд может слать unitId как строку "U1" — ArduinoJson не конвертирует в uint8_t,
+        // возвращает 0xFF. RP2040 отклоняет unitId >= NUM_UNITS, поэтому при 0xFF чистим все юниты.
+        uint8_t uid = data["unitId"] | (uint8_t)0xFF;
+        if (uid < iDryer::MAX_UNITS) {
+            UartCmdPayload cmd{};
+            cmd.command = UartCmdCode::ClearErrors;
+            cmd.unitId  = uid;
+            s_uart.sendCommand(cmd);
+        } else {
+            for (uint8_t i = 0; i < iDryer::MAX_UNITS; i++) {
+                UartCmdPayload cmd{};
+                cmd.command = UartCmdCode::ClearErrors;
+                cmd.unitId  = i;
+                s_uart.sendCommand(cmd);
+            }
+        }
+    });
+
+    s_link.onCommand("storage", [](JsonObjectConst data) {
+        UartCmdPayload cmd{};
+        cmd.command     = UartCmdCode::Start;
+        cmd.targetState = (uint8_t)UartDryerMode::Storage;
+        cmd.unitId      = parseUnitId(data);
+        JsonObjectConst params = data["params"];
+        cmd.arg0        = (uint32_t)(params["temperature"].as<int>() * 10);
+        cmd.arg1        = (uint32_t)params["humidity"].as<int>();
+        s_uart.sendCommand(cmd);
+    });
+
+    s_link.onCommand("profile", [](JsonObjectConst data) {
+        UartProfilePayload p{};
+        p.unitId      = parseUnitId(data);
+        JsonObjectConst params = data["params"];
+        p.startStage  = params["startStage"].as<uint8_t>();
+        JsonArrayConst stages = params["stages"];
+        p.totalStages = 0;
+        for (JsonObjectConst s : stages) {
+            if (p.totalStages >= 10) break;
+            uint8_t i = p.totalStages++;
+            p.stages[i].temp = (uint16_t)(s["temperature"].as<int>() * 10);
+            p.stages[i].ramp = (uint16_t)s["ramp"].as<int>();
+            p.stages[i].hold = (uint16_t)s["hold"].as<int>();
+        }
+        s_uart.sendProfileCommand(p);
+    });
+
+    // set/invoke — пересылают JSON в RP2040 через ConfigPush (фрагмент с LAST_FRAGMENT).
+    static uint16_t s_configTid = 0;
+
+    s_link.onCommand("set", [](JsonObjectConst data) {
+        if (!data["id"].is<int>()) return;
+        char json[128];
+        StaticJsonDocument<128> doc;
+        doc["cmd"]  = "set";
+        doc["id"]   = data["id"].as<int>();
+        doc["unit"] = data["unit"] | 0;
+        if (data.containsKey("val")) doc["val"] = data["val"];
+        size_t len = serializeJson(doc, json, sizeof(json));
+
+        UartConfigChunkPayload p{};
+        p.transferId = ++s_configTid;
+        p.totalSize  = (uint16_t)len;
+        p.chunkIndex = 0;
+        memcpy(p.data, json, len);
+        s_uart.sendConfigPushChunk(p,
+            UART_CONFIG_CHUNK_HEADER_SIZE + (uint8_t)len,
+            UART_FLAG_ACK_REQ | UART_FLAG_LAST_FRAGMENT);
+    });
+
+    s_link.onCommand("invoke", [](JsonObjectConst data) {
+        if (!data["id"].is<int>()) return;
+        char json[64];
+        StaticJsonDocument<64> doc;
+        doc["cmd"] = "invoke";
+        doc["id"]  = data["id"].as<int>();
+        size_t len = serializeJson(doc, json, sizeof(json));
+
+        UartConfigChunkPayload p{};
+        p.transferId = ++s_configTid;
+        p.totalSize  = (uint16_t)len;
+        p.chunkIndex = 0;
+        memcpy(p.data, json, len);
+        s_uart.sendConfigPushChunk(p,
+            UART_CONFIG_CHUNK_HEADER_SIZE + (uint8_t)len,
+            UART_FLAG_ACK_REQ | UART_FLAG_LAST_FRAGMENT);
+    });
+
+    // write_rfid: Variant B контракта (see write_rfid_payload_mismatch).
+    // 1) парсим JSON от портала, 2) base64 → bytes, 3) UART WriteRfid + ACK,
+    // 4) фрагменты по 163 байта stop-and-wait, 5) публикуем rfid/write_result.
+    s_link.onCommand("write_rfid", [](JsonObjectConst data) {
+        // Этап 1. Парсинг JSON.
+        const char* commandId = data["commandId"] | "";
+        if (!*commandId) {
+            HAL_LOG_WARN("RFID", "write_rfid: missing commandId — cannot respond");
+            return;
+        }
+        uint8_t unitId = parseUnitId(data);
+        if (unitId >= iDryer::MAX_UNITS) {
+            // Fallback: payload с unitId как int 0..3.
+            JsonVariantConst v = data["unitId"];
+            if (v.is<int>()) {
+                int u = v.as<int>();
+                if (u >= 0 && u < iDryer::MAX_UNITS) unitId = (uint8_t)u;
+            }
+        }
+        if (unitId >= iDryer::MAX_UNITS) {
+            publishWriteResult(commandId, "failed", "invalid unitId");
+            return;
+        }
+        const char* b64 = data["data"] | (const char*)nullptr;
+        if (!b64 || !*b64) {
+            publishWriteResult(commandId, "failed", "missing data");
+            return;
+        }
+
+        // Variant B новые поля — пока только логируем (см. долг #4 в отчёте).
+        const char* expectedUid = data["expectedUid"] | (const char*)nullptr;
+        uint32_t    ttlMs       = data["ttlMs"] | 15000u;
+        HAL_LOG_INFO("RFID", "write_rfid: cmd=%s unit=U%u expectedUid=%s ttl=%ums",
+                     commandId, unitId + 1,
+                     expectedUid ? expectedUid : "(none)", (unsigned)ttlMs);
+        // TODO(expectedUid): MCU должен валидировать UID метки перед записью
+        //                    (требует доработки iDryerControllerV2 — добавить поле в UART).
+        // TODO(ttlMs):       сейчас используем фиксированный 200мс на ACK; полная
+        //                    операция укладывается в ~1.5с. Если портал станет
+        //                    слать ttlMs < 2000 — нужно учитывать.
+
+        // Этап 2. Base64 decode → raw bytes (макс 888 байт для RFID).
+        constexpr size_t kMaxRfidBytes = 888;
+        uint8_t raw[kMaxRfidBytes] = {};
+        size_t rawLen = 0;
+        int rc = mbedtls_base64_decode(raw, sizeof(raw), &rawLen,
+                                       reinterpret_cast<const unsigned char*>(b64),
+                                       strlen(b64));
+        if (rc != 0 || rawLen == 0 || rawLen > kMaxRfidBytes) {
+            char err[64];
+            snprintf(err, sizeof(err), "base64 decode failed rc=%d len=%u",
+                     rc, (unsigned)rawLen);
+            publishWriteResult(commandId, "failed", err);
+            return;
+        }
+
+        // Этап 3. UART команда WriteRfid + ACK от MCU.
+        constexpr uint32_t kAckTimeoutMs   = 200;
+        constexpr uint32_t kVerifyHeader32 = 1;  // дефолт legacy
+        UartCmdPayload cmd{};
+        cmd.command = UartCmdCode::WriteRfid;
+        cmd.unitId  = unitId;
+        cmd.arg0    = (uint32_t)rawLen;
+        cmd.arg1    = kVerifyHeader32;
+        s_uart.sendCommand(cmd, true);  // ackRequired = true
+        if (!s_uart.waitForAck(kAckTimeoutMs)) {
+            publishWriteResult(commandId, "failed", "command ack timeout");
+            return;
+        }
+
+        // Этап 4. Фрагменты данных (stop-and-wait, кусок 163 байта).
+        constexpr size_t kFragSize = 163;
+        const size_t fragCount = (rawLen + kFragSize - 1) / kFragSize;
+        for (size_t f = 0; f < fragCount; f++) {
+            UartRfidDataPayload frag{};
+            frag.readerId = 0xFF;  // bridge не знает mapping slot→reader
+            frag.unitId   = unitId;
+            const size_t srcOff = f * kFragSize;
+            size_t copyLen = rawLen - srcOff;
+            if (copyLen > kFragSize) copyLen = kFragSize;
+            memcpy(frag.fragment, raw + srcOff, copyLen);
+
+            const bool isLast = (f == fragCount - 1);
+            uint8_t flags = UART_FLAG_ACK_REQ;
+            flags |= isLast ? UART_FLAG_LAST_FRAGMENT : UART_FLAG_FRAGMENT;
+            s_uart.sendRfidWriteData(frag, flags);
+
+            if (!s_uart.waitForAck(kAckTimeoutMs)) {
+                char err[64];
+                snprintf(err, sizeof(err), "frag[%u/%u] ack timeout",
+                         (unsigned)f, (unsigned)fragCount);
+                publishWriteResult(commandId, "failed", err);
+                return;
+            }
+        }
+
+        // Этап 5. Успех.
+        HAL_LOG_INFO("RFID", "write_rfid: cmd=%s OK (%u bytes, %u frags)",
+                     commandId, (unsigned)rawLen, (unsigned)fragCount);
+        publishWriteResult(commandId, "ok", nullptr);
+    });
+
+    // Heartbeat → RP2040: без него RP2040 не устанавливает uartLinkReady=true
+    // и никогда не шлёт накопленные ошибки (errlog) через UART.
+    s_link.every(5000, []() {
+        UartHeartbeatPayload hb{};
+        hb.uptimeSeconds   = millis() / 1000;
+        hb.wifiRssiDbm     = (int16_t)WiFi.RSSI();
+        hb.errorsSinceBoot = 0;
+        hb.cloudState      = static_cast<idryer::UartLinkCloudState>(s_link.isOnline() ? 7 : 1);
+        s_uart.sendHeartbeat(hb);
+    });
+
+    // При выходе в онлайн запрашиваем конфиг у RP2040 (кэша нет — см. publishConfig).
+    // RP2040 шлёт Hello только при своём старте — если ESP32 перезапустился позже,
+    // Hello не придёт, запрашиваем GetConfig сами при первом online.
+    s_link.every(2000, []() {
+        const bool online = s_link.isOnline();
+        if (online && !s_prevOnline) {
+            requestConfig();
+        }
+        s_prevOnline = online;
+    });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+void setup() {
+    Serial.begin(115200);
+    WiFi.persistent(false);
+
+    s_link.onDiagnostic([](const char* message) {
+        Serial.println(message);
+    });
+
+    s_link.onClaimPin([](const char* pin, uint32_t exp) {
+        Serial.printf("CLAIM_PIN:%s:%lu\n", pin, exp);
+        Serial.flush();
+        UartClaimStatusPayload sp{};
+        sp.status = UartClaimStatus::WaitingClaim;
+        strncpy(sp.pin, pin, sizeof(sp.pin) - 1);
+        sp.remainingSeconds = exp;
+        s_uart.sendClaimStatus(sp);
+    });
+
+    s_link.setWaitForMcuSerial(true);
+    s_link.begin();
+    s_link.integrationsManager()->setActive(idryer::cloud::ActiveIntegration::Ha);
+    registerCommands();
+
+    // ESP32-C3: GPIO6/7 по умолчанию JTAG — сбрасываем перед Serial1.
+    gpio_reset_pin((gpio_num_t)UART_RX_PIN);
+    gpio_reset_pin((gpio_num_t)UART_TX_PIN);
+    Serial1.begin(115200, SERIAL_8N1, UART_RX_PIN, UART_TX_PIN);
+    s_uart.begin(&s_uartSerial, 115200);
+
+    s_uart.setHelloHandler(onHello);
+    s_uart.setTelemetryHandler(onTelemetry);
+    s_uart.setStatusHandler(onStatus);
+    s_uart.setWeightsHandler(onWeights);
+    s_uart.setConfigChunkHandler(onConfigChunk);
+    s_uart.setClaimStartHandler(onClaimStart);
+    s_uart.setErrorHandler(onUartError);
+    s_uart.setLogHandler(onLog);
+    s_uart.setRfidHandler([](const UartRfidPayload& p, const UartFrameHeader&) {
+        StaticJsonDocument<128> doc;
+        char uid[4];
+        snprintf(uid, sizeof(uid), "U%u", p.unitId + 1);
+        doc["unitId"]   = uid;
+        doc["event"]    = (p.event == 1) ? "tag_detected" : "tag_removed";
+        doc["readerId"] = p.readerId;
+        if (p.event == 1) doc["tag"] = p.tag;
+        s_link.devicePublisher()->publishRfid(doc);
+    });
+
+    HAL_LOG_INFO("MAIN", "iDryer Link v2 ready, fw=%s", VERSION_STR);
+}
+
+void loop() {
+    s_link.loop();
+    s_uart.loop();
+
+    // Periodic HelloRequest to RP2040 until it responds (max 12 attempts, every 5s).
+    // Needed when RP2040 was already running before ESP32 booted and its initial
+    // Hello was missed.
+    if (!s_mcuConnected) {
+        static uint32_t s_lastHelloReqMs = 0;
+        static uint8_t  s_helloReqCount  = 0;
+        const uint32_t  now = millis();
+        if (s_helloReqCount < 12 && now - s_lastHelloReqMs >= 5000) {
+            UartHelloPayload req{};
+            req.role = UartRole::HelloRequest;
+            req.firmwareVersion = VERSION_NUMBER;
+            s_uart.sendHello(req, false);
+            s_lastHelloReqMs = now;
+            s_helloReqCount++;
+            HAL_LOG_INFO("UART", "HelloRequest -> RP2040 (attempt %u/12)", s_helloReqCount);
+        }
     }
 }
