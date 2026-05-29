@@ -308,11 +308,20 @@ static void onStatus(const UartStatusPayload& p, const UartFrameHeader&) {
 }
 
 static void onWeights(const UartWeightsPayload& p, const UartFrameHeader&) {
+    StaticJsonDocument<512> doc;
+    JsonArray arr = doc.createNestedArray("weights");
     for (uint8_t i = 0; i < p.count && i < iDryer::MAX_UNITS; i++) {
         const auto& w = p.weights[i];
-        if (w.unitId < iDryer::MAX_UNITS)
-            s_link.telemetry.weightG[w.unitId] = w.weightGramsC10 / 10u;
+        if (w.unitId >= iDryer::MAX_UNITS) continue;
+        char sid[4]; snprintf(sid, sizeof(sid), "W%u", (unsigned)(w.sensorId + 1));
+        char uid[4]; snprintf(uid, sizeof(uid), "U%u", (unsigned)(w.unitId + 1));
+        JsonObject o = arr.createNestedObject();
+        o["sensorId"] = sid;
+        o["value"]    = w.weightGramsC10 / 10.0f;
+        o["unitId"]   = uid;
     }
+    if (!arr.isNull() && arr.size() > 0)
+        s_link.devicePublisher()->publishWeights(doc);
 }
 
 // RP2040 шлёт JSON меню фрагментами. ConfigReceiver склеивает, потом публикуем.
