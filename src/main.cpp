@@ -37,10 +37,10 @@ constexpr int UART_TX_PIN = 7;
 static const iDryer::Config CFG = {
     .deviceType        = iDryer::DeviceType::Dryer,
     .unitsCount        = 1,  // реальное число физических юнитов на этом железе; уточняется из Hello RP2040
-    .hasHeaterPower    = true,
-    .hasFanStatus      = true,
+    .hasHeater         = true,
+    .hasFan            = true,
     .hasLed            = false,
-    .hasScales         = true,
+    .hasWeight         = true,
     .hasRfid           = true,
     .hasAirTemp        = true,
     .hasAirHumidity    = true,
@@ -75,6 +75,20 @@ static bool s_haControlsReady    = false;
 // Буфер для собранного меню выделяется на heap по требованию (publishConfig).
 // В .bss держать ~38 КБ нельзя — фрагментирует heap, ломает TLS-handshake mbedtls.
 
+// Алерт в портал при ошибках сборки/публикации конфига. Сырой JSON НЕ
+// публикуем: портал его не понимает, а retained-публикация затирает последний
+// хороший config на брокере — тихая ошибка хуже громкой.
+static void publishMenuError(const char* event, const char* message) {
+    HAL_LOG_ERROR("MENU", "%s: %s", event, message);
+    StaticJsonDocument<192> ev;
+    ev["severity"] = "ERROR";
+    ev["source"]   = "MENU";
+    ev["event"]    = event;
+    ev["message"]  = message;
+    ev["unitId"]   = "DEVICE";
+    s_link.devicePublisher()->publishEvent(ev);
+}
+
 // ── Публикация delta (один-несколько изменённых пунктов) ─────────────────────
 // json — сырой delta от RP2040: {"rev":N,"vals":{"7":[50]}}
 // Используется когда ConfigReceiver::isDelta() (старший бит transferId).
@@ -85,7 +99,7 @@ static void publishConfigDelta(const char* json, uint16_t len) {
 
     // Обновляем g_menu_cache (для local-WS клиентов и других потребителей).
     if (!menu_parseDelta(json)) {
-        HAL_LOG_WARN("MENU", "parseDelta FAILED, dropping (%u bytes)", len);
+        publishMenuError("DELTA_PARSE_FAILED", "menu_parseDelta returned false");
         return;
     }
 
@@ -93,11 +107,11 @@ static void publishConfigDelta(const char* json, uint16_t len) {
     // хватает на 1–3 изменённых per-unit пункта; на стеке.
     StaticJsonDocument<512> doc;
     if (deserializeJson(doc, json, len)) {
-        HAL_LOG_WARN("MENU", "delta deserialize FAILED (%u bytes)", len);
+        publishMenuError("DELTA_DESERIALIZE_FAILED", "ArduinoJson deserialize error");
         return;
     }
     if (!doc.containsKey("vals")) {
-        HAL_LOG_WARN("MENU", "delta missing 'vals' key, dropping");
+        publishMenuError("DELTA_MISSING_VALS", "delta JSON has no 'vals' key");
         return;
     }
     doc["d"] = doc["vals"];
@@ -106,7 +120,7 @@ static void publishConfigDelta(const char* json, uint16_t len) {
     char buf[256];
     size_t out = serializeJson(doc, buf, sizeof(buf));
     if (out == 0) {
-        HAL_LOG_WARN("MENU", "delta reserialize FAILED");
+        publishMenuError("DELTA_RESERIALIZE_FAILED", "serializeJson returned 0");
         return;
     }
 
@@ -117,48 +131,49 @@ static void publishConfigDelta(const char* json, uint16_t len) {
 // ── Вспомогательная функция публикации конфига ────────────────────────────────
 // json — сырой JSON от RP2040: {v, full:true, vals:{...}}
 // Парсим его в g_menu_cache, затем собираем {v, menu:[...]} для портала.
+// При любой ошибке шлём алерт в портал и НЕ публикуем сырой JSON — он перетёр
+// бы последний хороший retained config на брокере (портал raw-формат не парсит).
 static void publishConfig(const char* json, uint16_t len) {
     if (!json || len == 0) {
-        HAL_LOG_WARN("MENU", "publishConfig skipped: json=%p len=%u", json, len);
+        publishMenuError("PUBLISH_EMPTY_INPUT", "publishConfig called with empty json");
         return;
     }
 
     // Парсим vals из RP2040 → обновляем g_menu_cache
     if (!menu_parseFullConfig(json)) {
-        HAL_LOG_WARN("MENU", "parseFullConfig FAILED → publishing raw (%u bytes)", len);
-        s_link.devicePublisher()->publishConfigRaw(json, len);
-        HAL_LOG_INFO("MENU", "TX raw → MQTT: %u bytes", len);
+        char msg[64];
+        snprintf(msg, sizeof(msg), "menu_parseFullConfig failed (input %u bytes)", len);
+        publishMenuError("PARSE_FAILED", msg);
         return;
     }
-    // HAL_LOG_INFO("MENU", "parseFullConfig OK (values cached)");
 
-    // Heap-alloc буфера на время сборки и публикации (после TLS уже подняли).
-    // HAL_LOG_INFO("MENU", "malloc(%u): free=%u largest=%u",
-    //              (unsigned)MENU_FULL_JSON_BUF_SIZE,
-    //              (unsigned)heap_caps_get_free_size(MALLOC_CAP_DEFAULT),
-    //              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT));
+    // Heap-alloc буфера ~34КБ на время сборки. Лог free/largest до запроса —
+    // если упадёт, видно состояние heap. Тренд этих чисел показывает рост
+    // фрагментации после TLS-handshake и MQTT-reconnect'ов.
+    HAL_LOG_INFO("MENU", "malloc(%u): heap free=%u largest=%u",
+                 (unsigned)MENU_FULL_JSON_BUF_SIZE,
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_DEFAULT),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT));
     char* menuJson = (char*)malloc(MENU_FULL_JSON_BUF_SIZE);
     if (!menuJson) {
-        HAL_LOG_ERROR("MENU", "malloc(%u) FAILED → publishing raw (%u bytes)",
-                      (unsigned)MENU_FULL_JSON_BUF_SIZE, len);
-        s_link.devicePublisher()->publishConfigRaw(json, len);
-        HAL_LOG_INFO("MENU", "TX raw → MQTT: %u bytes", len);
+        char msg[128];
+        snprintf(msg, sizeof(msg),
+                 "malloc(%u) failed, heap free=%u largest=%u",
+                 (unsigned)MENU_FULL_JSON_BUF_SIZE,
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_DEFAULT),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT));
+        publishMenuError("MALLOC_FAILED", msg);
         return;
     }
-    // HAL_LOG_INFO("MENU", "malloc OK at %p", menuJson);
 
     // Собираем {v, menu:[...]} для портала
     size_t menuLen = menu_buildFullJson(menuJson, MENU_FULL_JSON_BUF_SIZE);
-    // HAL_LOG_INFO("MENU", "buildFullJson returned %u bytes", (unsigned)menuLen);
     if (menuLen == 0) {
-        HAL_LOG_WARN("MENU", "buildFullJson FAILED → publishing raw (%u bytes)", len);
         free(menuJson);
-        s_link.devicePublisher()->publishConfigRaw(json, len);
-        HAL_LOG_INFO("MENU", "TX raw → MQTT: %u bytes", len);
+        publishMenuError("BUILD_FAILED",
+                         "menu_buildFullJson returned 0 (doc overflowed or serialize failed)");
         return;
     }
-    // HAL_LOG_INFO("MENU", "TX preview: %.200s%s", menuJson,
-    //              (menuLen > 200) ? "..." : "");
 
     s_link.devicePublisher()->publishConfigRaw(menuJson, menuLen);
     HAL_LOG_INFO("MENU", "TX assembled → MQTT: %u bytes", (unsigned)menuLen);
