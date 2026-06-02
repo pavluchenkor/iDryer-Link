@@ -6,7 +6,7 @@
 #include <stdbool.h>
 #include "menu_meta.h"
 
-#define MENU_MAX_UNITS 3
+#define MENU_MAX_UNITS 1
 
 // Total menu items: 202, with values: 115
 

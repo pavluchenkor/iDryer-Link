@@ -319,6 +319,9 @@ static void onStatus(const UartStatusPayload& p, const UartFrameHeader&) {
         s_link.status.durationS[e.unitId]  = (uint32_t)e.durationMinutes * 60u;
         s_link.status.elapsedS[e.unitId]   = e.elapsedSeconds;
     }
+    // Зеркалим device-wide флаг из RP2040 в SDK. Setter триггерит немедленный
+    // publishStatusNow при изменении, периодика покрывает «не изменилось».
+    s_link.setIgnoreExternalCmd(p.ignoreExternalCmd != 0);
     s_link.publishStatusNow();
 }
 
