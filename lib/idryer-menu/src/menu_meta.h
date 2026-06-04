@@ -7,6 +7,7 @@
 
 #define MENU_META_COUNT 202
 #define MENU_LANG_COUNT 2
+#define MENU_SERIALIZED_MAX_SIZE 26290
 
 typedef enum {
     META_SUBMENU = 0,
