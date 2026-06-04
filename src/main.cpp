@@ -26,6 +26,7 @@
 
 #include <menu_commands.h>
 #include <menu_cache.h>
+#include <menu_publisher.h>  // idryer::MenuPublisher — pre-allocated публикатор меню
 
 using namespace idryer;
 
@@ -133,6 +134,12 @@ static void publishConfigDelta(const char* json, uint16_t len) {
 // Парсим его в g_menu_cache, затем собираем {v, menu:[...]} для портала.
 // При любой ошибке шлём алерт в портал и НЕ публикуем сырой JSON — он перетёр
 // бы последний хороший retained config на брокере (портал raw-формат не парсит).
+// Pre-allocated публикатор меню — один malloc на старте после s_link.begin(),
+// переиспользуется на каждый publishConfig. Заменяет старую логику с malloc()
+// MENU_FULL_JSON_BUF_SIZE на каждый вызов (фрагментировала heap при
+// MQTT-reconnect'ах). См. menu_publisher.h.
+static idryer::MenuPublisher s_menuPub;
+
 static void publishConfig(const char* json, uint16_t len) {
     if (!json || len == 0) {
         publishMenuError("PUBLISH_EMPTY_INPUT", "publishConfig called with empty json");
@@ -147,40 +154,19 @@ static void publishConfig(const char* json, uint16_t len) {
         return;
     }
 
-    // Heap-alloc буфера ~34КБ на время сборки. Лог free/largest до запроса —
-    // если упадёт, видно состояние heap. Тренд этих чисел показывает рост
-    // фрагментации после TLS-handshake и MQTT-reconnect'ов.
-    HAL_LOG_INFO("MENU", "malloc(%u): heap free=%u largest=%u",
-                 (unsigned)MENU_FULL_JSON_BUF_SIZE,
-                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_DEFAULT),
-                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT));
-    char* menuJson = (char*)malloc(MENU_FULL_JSON_BUF_SIZE);
-    if (!menuJson) {
+    // Pre-allocated buffer + DynamicJsonDocument (выделены в begin() после TLS).
+    // Никаких malloc/free в горячем пути.
+    size_t menuLen = s_menuPub.publishFull(s_link.devicePublisher());
+    if (menuLen == 0) {
         char msg[128];
         snprintf(msg, sizeof(msg),
-                 "malloc(%u) failed, heap free=%u largest=%u",
-                 (unsigned)MENU_FULL_JSON_BUF_SIZE,
+                 "menuPub.publishFull returned 0 (init failed / overflow), heap free=%u largest=%u",
                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_DEFAULT),
                  (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT));
-        publishMenuError("MALLOC_FAILED", msg);
+        publishMenuError("PUBLISH_FAILED", msg);
         return;
     }
-
-    // Собираем {v, menu:[...]} для портала
-    size_t menuLen = menu_buildFullJson(menuJson, MENU_FULL_JSON_BUF_SIZE);
-    if (menuLen == 0) {
-        free(menuJson);
-        publishMenuError("BUILD_FAILED",
-                         "menu_buildFullJson returned 0 (doc overflowed or serialize failed)");
-        return;
-    }
-
-    s_link.devicePublisher()->publishConfigRaw(menuJson, menuLen);
     HAL_LOG_INFO("MENU", "TX assembled → MQTT: %u bytes", (unsigned)menuLen);
-    free(menuJson);
-    // HAL_LOG_INFO("MENU", "free done: heap free=%u largest=%u",
-    //              (unsigned)heap_caps_get_free_size(MALLOC_CAP_DEFAULT),
-    //              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT));
 
     // При первом получении конфига регистрируем HA controls с реальными min/max из меню.
     if (!s_haControlsReady) {
@@ -686,6 +672,20 @@ void setup() {
 
     s_link.setWaitForMcuSerial(true);
     s_link.begin();
+
+    // Pre-allocate MenuPublisher СРАЗУ после s_link.begin() — TLS-handshake уже
+    // прошёл и contiguous heap максимально свободен. ~37КБ на одну аллокацию
+    // (MENU_SERIALIZED_MAX_SIZE + DynamicJsonDocument capacity). Без этого
+    // publishConfig() сразу упадёт с PUBLISH_FAILED.
+    if (!s_menuPub.begin()) {
+        HAL_LOG_ERROR("MENU",
+                      "MenuPublisher.begin() failed, heap free=%u largest=%u",
+                      (unsigned)heap_caps_get_free_size(MALLOC_CAP_DEFAULT),
+                      (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT));
+        // Не выходим — продукт продолжает работу, но publishConfig вернёт false
+        // до перезагрузки. Лог будет в админке через publishMenuError.
+    }
+
     s_link.integrationsManager()->setActive(idryer::cloud::ActiveIntegration::Ha);
     registerCommands();
 
