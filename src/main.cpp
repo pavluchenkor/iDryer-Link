@@ -21,6 +21,7 @@
 #include <config/config_manager.h>
 #include <hal/hal_arduino.h>
 #include <local_access/device_publisher.h>
+#include <ota_receiver.h>  // OtaReceiver: target=esp + UART-proxy для target=rp2040
 
 #include "version.h"
 
@@ -713,6 +714,12 @@ void setup() {
         if (p.event == 1) doc["tag"] = p.tag;
         s_link.devicePublisher()->publishRfid(doc);
     });
+
+    // Phase 6 OTA: target=esp — self-flash через Update lib; target=rp2040 —
+    // UART-proxy в RP (DRYER paired OTA, Этап 2). UartBridge передаём для
+    // активации rp2040-ветки. markCurrentBootValid НЕ зовём в этой точке —
+    // для DRYER это будет условно после Hello-handshake (Этап 6).
+    idryer::OtaReceiver::instance().begin(&s_link, "idryer_link", &s_uart);
 
     HAL_LOG_INFO("MAIN", "iDryer Link v2 ready, fw=%s", VERSION_STR);
 }
