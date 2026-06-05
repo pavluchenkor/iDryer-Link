@@ -727,6 +727,8 @@ void setup() {
 void loop() {
     s_link.loop();
     s_uart.loop();
+    // Paired OTA Этап 5: периодически шлём RP актуальный espReady-статус.
+    idryer::OtaReceiver::instance().tick(millis());
 
     // Periodic HelloRequest to RP2040 until it responds (max 12 attempts, every 5s).
     // Needed when RP2040 was already running before ESP32 booted and its initial
