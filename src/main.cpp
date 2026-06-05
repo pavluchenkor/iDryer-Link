@@ -238,6 +238,10 @@ static iDryer::UnitMode modeFromUart(UartDryerMode m) {
 // ── UART handlers (RP2040 → ESP32) ────────────────────────────────────────────
 
 static bool s_mcuConnected = false;
+// Paired OTA Этап 6: bootValid должен дёрнуться ТОЛЬКО после первого Hello
+// с правильным major (= RP подтвердила что мы paired-совместимы). Без этого
+// при reboot ESP откатится bootloader'ом. Идемпотентный single-shot флаг.
+static bool s_bootValidConfirmed = false;
 
 static void requestConfig() {
     UartCmdPayload cmd{};
@@ -249,6 +253,24 @@ static void requestConfig() {
 static void onHello(const UartHelloPayload& p, const UartFrameHeader&) {
     HAL_LOG_INFO("UART", "Hello: type=%u fw=%u units=%u serial=%s",
                  p.deviceType, p.firmwareVersion, p.unitsCount, p.mcuSerial);
+
+    // Paired OTA Этап 6: подтверждаем boot ТОЛЬКО когда RP прислала Hello с
+    // major == VERSION_MAJOR ESP. До этого момента bootloader-rollback
+    // активен — если новая прошивка ESP несовместима с RP, следующий
+    // power-cycle откатит ESP на старую. После подтверждения rollback
+    // отключается (esp_ota_mark_app_valid_cancel_rollback идемпотентен).
+    // Без таймаута: ждём сколько нужно (миграция EEPROM на RP может занять минуты).
+    if (!s_bootValidConfirmed) {
+        uint8_t rpMajor = (uint8_t)((p.firmwareVersion >> 16) & 0xFF);
+        if (rpMajor == VERSION_MAJOR) {
+            idryer::OtaReceiver::markCurrentBootValid();
+            s_bootValidConfirmed = true;
+            HAL_LOG_INFO("OTA", "Boot confirmed: RP major=%u matches ESP", rpMajor);
+        } else {
+            HAL_LOG_WARN("OTA", "Boot NOT confirmed: RP major=%u != ESP %u (rollback armed)",
+                         rpMajor, VERSION_MAJOR);
+        }
+    }
 
     // Always ack Hello to give RP2040 connection info (IP/SSID).
     UartHelloAckPayload ack{};
