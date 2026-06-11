@@ -25,6 +25,12 @@
 
 #include "version.h"
 
+// HW-идентификатор Link-платы. Задаётся при сборке через build_flags
+// (-DHW_LINK=\"esp32c3-super-mini\"). Fallback — для сборок без флага.
+#ifndef HW_LINK
+#define HW_LINK "esp32c3-super-mini"
+#endif
+
 #include <menu_commands.h>
 #include <menu_cache.h>
 #include <menu_publisher.h>  // idryer::MenuPublisher — pre-allocated публикатор меню
@@ -52,7 +58,7 @@ static const iDryer::Config CFG = {
     .allowMoonraker    = false,
     .telemetryPeriodMs = 5000,
     .statusPeriodMs    = 10000,
-    .hardwareVersion   = "DRYER-v3",
+    .hardwareVersion   = HW_LINK,
     .firmwareVersion   = VERSION_STR,
     .model             = "iDryer",
 };
@@ -283,6 +289,7 @@ static void onHello(const UartHelloPayload& p, const UartFrameHeader&) {
     // and publishInfoNow so that buildInfoJson() picks up the correct mcuSerial.
     auto result = s_link.setMcuSerial(p.mcuSerial);
     s_link.setMcuFirmwareVersion(p.firmwareVersion);
+    s_link.setMcuHardwareVersion(p.hardwareVersion);  // железо контроллера → info.mcuHardwareVersion
 
     if (result == iDryer::McuSerialResult::Mismatch) {
         // Different RP2040 connected — signal error to controller via UART.
@@ -741,7 +748,7 @@ void setup() {
     // UART-proxy в RP (DRYER paired OTA, Этап 2). UartBridge передаём для
     // активации rp2040-ветки. markCurrentBootValid НЕ зовём в этой точке —
     // для DRYER это будет условно после Hello-handshake (Этап 6).
-    idryer::OtaReceiver::instance().begin(&s_link, "idryer_link", &s_uart);
+    idryer::OtaReceiver::instance().begin(&s_link, "idryer_link", &s_uart, VERSION_MAJOR);
 
     HAL_LOG_INFO("MAIN", "iDryer Link v2 ready, fw=%s", VERSION_STR);
 }
