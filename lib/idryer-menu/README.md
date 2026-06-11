@@ -32,8 +32,10 @@ MCU — источник истины. LINK кэширует значения д
 | `menu_ids.h` | enum MenuId с ID пунктов | Генератор |
 | `menu_cache.h` | Кэш значений (заголовок) | Генератор |
 | `menu_cache.cpp` | Кэш значений (g_menu_cache) | Генератор |
-| `menu_commands.h` | Парсинг/формирование JSON | Вручную |
-| `menu_commands.cpp` | Реализация | Вручную |
+
+> `menu_commands` (парсинг/формирование JSON) больше не лежит здесь — он вынесен
+> в `idryer-core` как header-only `menu_commands.h` (общий для всех продуктов,
+> подключается через `#include <menu_commands.h>`). См. idryer-core/src/menu_commands.h.
 
 ## Использование
 

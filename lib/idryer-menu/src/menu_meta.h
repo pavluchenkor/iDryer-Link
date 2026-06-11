@@ -7,6 +7,7 @@
 
 #define MENU_META_COUNT 202
 #define MENU_LANG_COUNT 2
+#define MENU_SERIALIZED_MAX_SIZE 24347
 
 typedef enum {
     META_SUBMENU = 0,
@@ -803,10 +804,10 @@ static const MenuMeta g_menu_meta[MENU_META_COUNT] = {
     { 188, { "СВЯЗАТЬ", "CLAIM" }, { nullptr, nullptr },
       META_ACTION, 187, -1, 0,
       META_VT_F32, 0.0f, 0.0f, 0.0f, META_SCOPE_PER_UNIT, nullptr },
-    // [189] cmd_ignore_external
+    // [189] ignore_external_cmd
     { 189, { "ИГНОР КОМАНД", "IGNOR EXT CMD" }, { nullptr, nullptr },
       META_TOGGLE, 187, -1, 0,
-      META_VT_BOOL, 0.0f, 0.0f, 1.0f, META_SCOPE_GLOBAL, nullptr },
+      META_VT_BOOL, 0.0f, 0.0f, 1.0f, META_SCOPE_GLOBAL, "system.ignore_external_cmd" },
     // [190] session_count
     { 190, { "СЧЕТЧИК СЕССИЙ", "SESSION COUNTER" }, { nullptr, nullptr },
       META_SUBMENU, 186, 191, 3,
