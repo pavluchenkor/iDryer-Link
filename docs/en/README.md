@@ -2,15 +2,15 @@
 
 Link is a connectivity module for iDryer. It plugs into the controller's Ethernet port and communicates with the control board through it (the port is used as a power + UART connector, not as a network interface). Link brings the dryer online and connects it to [portal.idryer.org](https://portal.idryer.org/).
 
-![link1](img/link2.png)
-![link1](img/link1.png)
+![link1](../../img/link2.png)
+![link1](../../img/link1.png)
 
 ## How to connect to the controller
 **Turn off controller power**
 
-**Assemble the RJ45 cable**, following ![RJ45](./img/RJ45.png), so the pairs are not mixed up. Important: here RJ45 is just a power/UART connector; do not plug it into a network switch.
+**Assemble the RJ45 cable**, following ![RJ45](../../img/RJ45.png), so the pairs are not mixed up. Important: here RJ45 is just a power/UART connector; do not plug it into a network switch.
 
-**Connect wires** to the ESP32-C3 Super Mini according to ![esp32superMini](./img/esp32superMini.png)
+**Connect wires** to the ESP32-C3 Super Mini according to ![esp32superMini](../../img/esp32superMini.png)
 
 **Depending on the type and manufacturer of the board, the location of the 6 and 7 pins may vary**. 
 Check the pinout provided by your board vendor.
@@ -22,16 +22,16 @@ UART_TX_PIN 7 (white-green)
 
 **ESP32-C3 Super Mini pinout**
 
-![ESP32-C3 Super Mini pinout](img/ESP32-C3-Super-Mini-pinout-low.jpg)
+![ESP32-C3 Super Mini pinout](../../img/ESP32-C3-Super-Mini-pinout-low.jpg)
 
 **ESP32-C3 Zero (Waveshare) pinout**
 
-![ESP32-C3 Zero pinout](img/ESP32-C3-ZERO-Waveshare-pinout-low.jpg)
+![ESP32-C3 Zero pinout](../../img/ESP32-C3-ZERO-Waveshare-pinout-low.jpg)
 
 Likewise, by checking the pinout, you can connect any compatible development board.
 
 **Cable pinout**
-![wiring](./img/wiring.png)
+![wiring](../../img/wiring.png)
 <!-- 5) Connect Link to the controller's Ethernet port. After power-on, the controller will work with Link as with an external modem. -->
 
 ## How to flash via the web flasher
@@ -58,8 +58,8 @@ The web flasher is available at https://install.idryer.org/
 ## Expected result
 - The controller sees Link immediately after power-on.
 - In the web portal, the device appears online within 1-2 minutes after Wi-Fi connection.
-- If status does not appear: recheck pinout using `img/RJ45.png`, crimp quality, correct board selection in the flashing step, and port configuration in the iDryer menu.
+- If status does not appear: recheck pinout using `../../img/RJ45.png`, crimp quality, correct board selection in the flashing step, and port configuration in the iDryer menu.
 
 ## CAD
 
-[Download the case](cad/link-case.stp)
+[Download the case](../../CAD/link-case.stp)
