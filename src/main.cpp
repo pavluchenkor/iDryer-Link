@@ -315,6 +315,10 @@ static void onHello(const UartHelloPayload& p, const UartFrameHeader&) {
 }
 
 static void onTelemetry(const UartTelemetryPayload& p, const UartFrameHeader& hdr) {
+    // [TEMP-DEBUG] Печатаем что реально пришло в payload — для отладки нулей в MQTT.
+    Serial.printf("[RX-TELE] count=%u u0_id=%u u0_t10=%d u0_h10=%u u0_pwr=%u u0_fan=%u\n",
+                  p.count, p.units[0].unitId, p.units[0].temperatureC10,
+                  p.units[0].humidityPct10, p.units[0].heaterPowerPct, p.units[0].fanOn);
     for (uint8_t i = 0; i < p.count && i < iDryer::MAX_UNITS; i++) {
         const auto& e = p.units[i];
         if (e.unitId >= iDryer::MAX_UNITS) continue;

@@ -3,7 +3,7 @@
 Link is a communication module for iDryer. It connects to the RJ45 port of the controller and provides internet access to the dryer through the [portal.idryer.org](https://portal.idryer.org/) portal.
 
 !!! note ""
-    RJ45 is used here as a power and UART connector — not as a network interface. Do not connect Link to a network switch.
+    RJ45 is used here as a power and communication connector — not as a network interface. Do not connect Link to a network switch.
 
 ![Link](img/link2.png)
 ![Link](img/link1.png)
@@ -28,8 +28,8 @@ Link is a communication module for iDryer. It connects to the RJ45 port of the c
     ![ESP32-C3 Super Mini](./img/esp32superMini.png)
 
     ```
-    UART_RX_PIN 6 (white-blue)
-    UART_TX_PIN 7 (white-green)
+    PIN 6 (white-blue)
+    PIN 7 (white-green)
     ```
 
     !!! note ""
