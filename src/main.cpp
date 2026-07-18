@@ -52,7 +52,7 @@ static const iDryer::Config CFG = {
     .hasRfid           = true,
     .hasAirTemp        = true,
     .hasAirHumidity    = true,
-    .hasHeaterTemp     = false,
+    .hasHeaterTemp     = true,
     .allowHa           = true,
     .allowBambu        = false,
     .allowMoonraker    = false,
@@ -324,6 +324,7 @@ static void onTelemetry(const UartTelemetryPayload& p, const UartFrameHeader& hd
         if (e.unitId >= iDryer::MAX_UNITS) continue;
         s_link.telemetry.airTempC[e.unitId]      = e.getTemperature(); // sentinel → NaN (нет данных)
         s_link.telemetry.airHumidityPct[e.unitId]= e.getHumidity();
+        s_link.telemetry.heaterTempC[e.unitId]   = e.getHeaterTemp(); // термистор нагревателя, sentinel → NaN
         s_link.telemetry.heaterPower01[e.unitId] = e.heaterPowerPct  / 100.0f;
         s_link.telemetry.fanOn[e.unitId]         = (e.fanOn != 0);
     }
