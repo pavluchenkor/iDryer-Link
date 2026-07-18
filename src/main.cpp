@@ -322,8 +322,8 @@ static void onTelemetry(const UartTelemetryPayload& p, const UartFrameHeader& hd
     for (uint8_t i = 0; i < p.count && i < iDryer::MAX_UNITS; i++) {
         const auto& e = p.units[i];
         if (e.unitId >= iDryer::MAX_UNITS) continue;
-        s_link.telemetry.airTempC[e.unitId]      = e.temperatureC10  / 10.0f;
-        s_link.telemetry.airHumidityPct[e.unitId]= e.humidityPct10   / 10.0f;
+        s_link.telemetry.airTempC[e.unitId]      = e.getTemperature(); // sentinel → NaN (нет данных)
+        s_link.telemetry.airHumidityPct[e.unitId]= e.getHumidity();
         s_link.telemetry.heaterPower01[e.unitId] = e.heaterPowerPct  / 100.0f;
         s_link.telemetry.fanOn[e.unitId]         = (e.fanOn != 0);
     }
