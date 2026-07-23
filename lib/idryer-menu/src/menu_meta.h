@@ -5,9 +5,9 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-#define MENU_META_COUNT 202
+#define MENU_META_COUNT 201
 #define MENU_LANG_COUNT 2
-#define MENU_SERIALIZED_MAX_SIZE 26290
+#define MENU_SERIALIZED_MAX_SIZE 26257
 
 typedef enum {
     META_SUBMENU = 0,
@@ -723,11 +723,11 @@ static const MenuMeta g_menu_meta[MENU_META_COUNT] = {
     // [168] heater_max_temp
     { 168, { "МАКС.НАГРЕВАТЕЛЬ", "MAX TEMP" }, { "°C", "°C" },
       META_VALUE, 167, -1, 0,
-      META_VT_F32, 30.0f, 150.0f, 1.0f, META_SCOPE_PER_UNIT, nullptr },
+      META_VT_F32, 30.0f, 175.0f, 1.0f, META_SCOPE_PER_UNIT, nullptr },
     // [169] air_max_temp
     { 169, { "МАКС.ТЕМП.ВОЗДУХ", "MAX AIR TEMP" }, { "°C", "°C" },
       META_VALUE, 167, -1, 0,
-      META_VT_F32, 30.0f, 120.0f, 1.0f, META_SCOPE_PER_UNIT, nullptr },
+      META_VT_F32, 30.0f, 125.0f, 1.0f, META_SCOPE_PER_UNIT, "system.air_max_temp" },
     // [170] delta
     { 170, { "ДЕЛЬТА", "DELTA" }, { "°C", "°C" },
       META_VALUE, 167, -1, 0,
@@ -798,62 +798,58 @@ static const MenuMeta g_menu_meta[MENU_META_COUNT] = {
       META_VT_F32, 0.0f, 0.0f, 0.0f, META_SCOPE_PER_UNIT, nullptr },
     // [187] piortal
     { 187, { "ПОРТАЛ", "PORTAL" }, { nullptr, nullptr },
-      META_SUBMENU, 186, 188, 2,
+      META_SUBMENU, 186, 188, 1,
       META_VT_F32, 0.0f, 0.0f, 0.0f, META_SCOPE_PER_UNIT, nullptr },
-    // [188] start_claim
-    { 188, { "СВЯЗАТЬ", "CLAIM" }, { nullptr, nullptr },
-      META_ACTION, 187, -1, 0,
-      META_VT_F32, 0.0f, 0.0f, 0.0f, META_SCOPE_PER_UNIT, nullptr },
-    // [189] ignore_external_cmd
-    { 189, { "ИГНОР КОМАНД", "IGNOR EXT CMD" }, { nullptr, nullptr },
+    // [188] ignore_external_cmd
+    { 188, { "ИГНОР КОМАНД", "IGNOR EXT CMD" }, { nullptr, nullptr },
       META_TOGGLE, 187, -1, 0,
       META_VT_BOOL, 0.0f, 0.0f, 1.0f, META_SCOPE_GLOBAL, "system.ignore_external_cmd" },
-    // [190] session_count
-    { 190, { "СЧЕТЧИК СЕССИЙ", "SESSION COUNTER" }, { nullptr, nullptr },
-      META_SUBMENU, 186, 191, 3,
+    // [189] session_count
+    { 189, { "СЧЕТЧИК СЕССИЙ", "SESSION COUNTER" }, { nullptr, nullptr },
+      META_SUBMENU, 186, 190, 3,
       META_VT_F32, 0.0f, 0.0f, 0.0f, META_SCOPE_PER_UNIT, nullptr },
-    // [191] drying_session_count
-    { 191, { "СУШКА", "DRYING" }, { nullptr, nullptr },
-      META_VALUE, 190, -1, 0,
+    // [190] drying_session_count
+    { 190, { "СУШКА", "DRYING" }, { nullptr, nullptr },
+      META_VALUE, 189, -1, 0,
       META_VT_U16, 0.0f, 65535.0f, 1.0f, META_SCOPE_GLOBAL, nullptr },
-    // [192] storage_session_count
-    { 192, { "ХРАНЕНИЕ", "STORAGE" }, { nullptr, nullptr },
-      META_VALUE, 190, -1, 0,
+    // [191] storage_session_count
+    { 191, { "ХРАНЕНИЕ", "STORAGE" }, { nullptr, nullptr },
+      META_VALUE, 189, -1, 0,
       META_VT_U16, 0.0f, 65535.0f, 1.0f, META_SCOPE_GLOBAL, nullptr },
-    // [193] profile_session_count
-    { 193, { "ПРОФИЛЬ", "PROFILE" }, { nullptr, nullptr },
-      META_VALUE, 190, -1, 0,
+    // [192] profile_session_count
+    { 192, { "ПРОФИЛЬ", "PROFILE" }, { nullptr, nullptr },
+      META_VALUE, 189, -1, 0,
       META_VT_U16, 0.0f, 65535.0f, 1.0f, META_SCOPE_GLOBAL, nullptr },
-    // [194] hardware_config
-    { 194, { "КОНФИГУРАЦИЯ ПОРТОВ", "PORT CONFIG" }, { nullptr, nullptr },
-      META_SUBMENU, 186, 195, 3,
+    // [193] hardware_config
+    { 193, { "КОНФИГУРАЦИЯ ПОРТОВ", "PORT CONFIG" }, { nullptr, nullptr },
+      META_SUBMENU, 186, 194, 3,
       META_VT_F32, 0.0f, 0.0f, 0.0f, META_SCOPE_GLOBAL, nullptr },
-    // [195] port1_mode
-    { 195, { "ПОРТ 1", "PORT 1" }, { nullptr, nullptr },
-      META_VALUE, 194, -1, 0,
+    // [194] port1_mode
+    { 194, { "ПОРТ 1", "PORT 1" }, { nullptr, nullptr },
+      META_VALUE, 193, -1, 0,
       META_VT_U8, 0.0f, 3.0f, 1.0f, META_SCOPE_GLOBAL, nullptr },
-    // [196] port2_mode
-    { 196, { "ПОРТ 2", "PORT 2" }, { nullptr, nullptr },
-      META_VALUE, 194, -1, 0,
+    // [195] port2_mode
+    { 195, { "ПОРТ 2", "PORT 2" }, { nullptr, nullptr },
+      META_VALUE, 193, -1, 0,
       META_VT_U8, 0.0f, 3.0f, 1.0f, META_SCOPE_GLOBAL, nullptr },
-    // [197] port3_mode
-    { 197, { "ПОРТ 3", "PORT 3" }, { nullptr, nullptr },
-      META_VALUE, 194, -1, 0,
+    // [196] port3_mode
+    { 196, { "ПОРТ 3", "PORT 3" }, { nullptr, nullptr },
+      META_VALUE, 193, -1, 0,
       META_VT_U8, 0.0f, 3.0f, 1.0f, META_SCOPE_GLOBAL, nullptr },
-    // [198] ws_local
-    { 198, { "WS ЛОКАЛЬНЫЙ", "WS LOCAL" }, { nullptr, nullptr },
-      META_SUBMENU, 186, 199, 1,
+    // [197] ws_local
+    { 197, { "WS ЛОКАЛЬНЫЙ", "WS LOCAL" }, { nullptr, nullptr },
+      META_SUBMENU, 186, 198, 1,
       META_VT_F32, 0.0f, 0.0f, 0.0f, META_SCOPE_PER_UNIT, nullptr },
-    // [199] ws_enabled
-    { 199, { "ВКЛ/ВЫКЛ", "ON/OFF" }, { nullptr, nullptr },
-      META_TOGGLE, 198, -1, 0,
+    // [198] ws_enabled
+    { 198, { "ВКЛ/ВЫКЛ", "ON/OFF" }, { nullptr, nullptr },
+      META_TOGGLE, 197, -1, 0,
       META_VT_BOOL, 0.0f, 0.0f, 1.0f, META_SCOPE_GLOBAL, nullptr },
-    // [200] units_count
-    { 200, { "КОЛ-ВО ЮНИТОВ", "UNITS" }, { nullptr, nullptr },
+    // [199] units_count
+    { 199, { "КОЛ-ВО ЮНИТОВ", "UNITS" }, { nullptr, nullptr },
       META_VALUE, 186, -1, 0,
       META_VT_U8, 1.0f, 3.0f, 1.0f, META_SCOPE_GLOBAL, nullptr },
-    // [201] language
-    { 201, { "ЯЗЫК", "LANGUAGE" }, { nullptr, nullptr },
+    // [200] language
+    { 200, { "ЯЗЫК", "LANGUAGE" }, { nullptr, nullptr },
       META_VALUE, 186, -1, 0,
       META_VT_U8, 0.0f, 1.0f, 1.0f, META_SCOPE_GLOBAL, nullptr },
 };

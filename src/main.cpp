@@ -708,6 +708,10 @@ void setup() {
     s_link.setWaitForMcuSerial(true);
     s_link.begin();
 
+    // Не шлём device-timestamp в publish: портал хранит своё серверное время
+    // приёма, device-timestamp избыточен (экономия трафика). См. MqttClient.
+    s_link.mqttClient()->setAddTimestamp(false);
+
     // Pre-allocate MenuPublisher СРАЗУ после s_link.begin() — TLS-handshake уже
     // прошёл и contiguous heap максимально свободен. ~37КБ на одну аллокацию
     // (MENU_SERIALIZED_MAX_SIZE + DynamicJsonDocument capacity). Без этого
