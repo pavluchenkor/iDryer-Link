@@ -256,6 +256,18 @@ static void requestConfig() {
     s_uart.sendCommand(cmd, false);
 }
 
+// Форвард action-команды портала/локального WS на RP2040 с проброшенным origin.
+// Локальные (WS в LAN) метятся UART_FLAG_LOCAL — гейт RP2040 ignore_external_cmd
+// их пропускает; облачные идут без флага и гейтятся. Origin берём из SDK
+// (валиден только внутри onCommand-хендлера). НЕ использовать для HA-кнопок и
+// прочих не-onCommand источников — там currentCommandFromLocal() неактуален.
+static uint8_t actionOriginFlag() {
+    return s_link.currentCommandFromLocal() ? UART_FLAG_LOCAL : 0;
+}
+static void sendActionCommand(const UartCmdPayload& cmd) {
+    s_uart.sendCommand(cmd, true, actionOriginFlag());
+}
+
 static void onHello(const UartHelloPayload& p, const UartFrameHeader&) {
     HAL_LOG_INFO("UART", "Hello: type=%u fw=%u units=%u serial=%s",
                  p.deviceType, p.firmwareVersion, p.unitsCount, p.mcuSerial);
@@ -455,21 +467,21 @@ static void registerCommands() {
         JsonObjectConst params = data["params"];
         cmd.arg0        = (uint32_t)(params["temperature"].as<int>() * 10);
         cmd.arg1        = (uint32_t)params["duration"].as<int>();
-        s_uart.sendCommand(cmd);
+        sendActionCommand(cmd);
     });
 
     s_link.onCommand("stop", [](JsonObjectConst data) {
         UartCmdPayload cmd{};
         cmd.command = UartCmdCode::Stop;
         cmd.unitId  = parseUnitId(data);
-        s_uart.sendCommand(cmd);
+        sendActionCommand(cmd);
     });
 
     s_link.onCommand("find", [](JsonObjectConst data) {
         UartCmdPayload cmd{};
         cmd.command = UartCmdCode::Find;
         cmd.unitId  = parseUnitId(data);
-        s_uart.sendCommand(cmd);
+        sendActionCommand(cmd);
     });
 
     s_link.onCommand("clear_errors", [](JsonObjectConst data) {
@@ -480,13 +492,13 @@ static void registerCommands() {
             UartCmdPayload cmd{};
             cmd.command = UartCmdCode::ClearErrors;
             cmd.unitId  = uid;
-            s_uart.sendCommand(cmd);
+            sendActionCommand(cmd);
         } else {
             for (uint8_t i = 0; i < iDryer::MAX_UNITS; i++) {
                 UartCmdPayload cmd{};
                 cmd.command = UartCmdCode::ClearErrors;
                 cmd.unitId  = i;
-                s_uart.sendCommand(cmd);
+                sendActionCommand(cmd);
             }
         }
     });
@@ -499,7 +511,7 @@ static void registerCommands() {
         JsonObjectConst params = data["params"];
         cmd.arg0        = (uint32_t)(params["temperature"].as<int>() * 10);
         cmd.arg1        = (uint32_t)params["humidity"].as<int>();
-        s_uart.sendCommand(cmd);
+        sendActionCommand(cmd);
     });
 
     s_link.onCommand("profile", [](JsonObjectConst data) {
@@ -516,7 +528,7 @@ static void registerCommands() {
             p.stages[i].ramp = (uint16_t)s["ramp"].as<int>();
             p.stages[i].hold = (uint16_t)s["hold"].as<int>();
         }
-        s_uart.sendProfileCommand(p);
+        s_uart.sendProfileCommand(p, true, actionOriginFlag());
     });
 
     // set/invoke — пересылают JSON в RP2040 через ConfigPush (фрагмент с LAST_FRAGMENT).
