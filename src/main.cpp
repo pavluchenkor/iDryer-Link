@@ -56,8 +56,10 @@ static const iDryer::Config CFG = {
     .allowHa           = true,
     .allowBambu        = false,
     .allowMoonraker    = false,
-    .telemetryPeriodMs = 5000,
-    .statusPeriodMs    = 10000,
+    .telemetryPeriodMs     = 30000,
+    .telemetryPeriodIdleMs = 60000,
+    .statusPeriodMs        = 60000,  // сверка; изменения mode/target уходят сразу (SDK)
+    .statusPeriodIdleMs    = 300000,
     .hardwareVersion   = HW_LINK,
     .firmwareVersion   = VERSION_STR,
     .model             = "iDryer",
@@ -353,9 +355,11 @@ static void onStatus(const UartStatusPayload& p, const UartFrameHeader&) {
         s_link.status.elapsedS[e.unitId]   = e.elapsedSeconds;
     }
     // Зеркалим device-wide флаг из RP2040 в SDK. Setter триггерит немедленный
-    // publishStatusNow при изменении, периодика покрывает «не изменилось».
+    // publishStatusNow при изменении.
     s_link.setIgnoreExternalCmd(p.ignoreExternalCmd != 0);
-    s_link.publishStatusNow();
+    // Публикацию в облако решает SDK: сразу при изменении mode/target/duration,
+    // иначе периодика-сверка (statusPeriodMs/statusPeriodIdleMs). Зеркалить
+    // каждый UART-кадр в MQTT (как было) — 720 пустых status/час.
 }
 
 static void onWeights(const UartWeightsPayload& p, const UartFrameHeader&) {
