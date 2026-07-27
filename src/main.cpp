@@ -342,6 +342,7 @@ static void onTelemetry(const UartTelemetryPayload& p, const UartFrameHeader& hd
         s_link.telemetry.heaterTempC[e.unitId]   = e.getHeaterTemp(); // термистор нагревателя, sentinel → NaN
         s_link.telemetry.heaterPower01[e.unitId] = e.heaterPowerPct  / 100.0f;
         s_link.telemetry.fanOn[e.unitId]         = (e.fanOn != 0);
+        s_link.telemetry.servoOpen[e.unitId]     = (e.servoOpen != 0);
     }
     s_uart.sendTelemetryAck(hdr.sequence);
 }
