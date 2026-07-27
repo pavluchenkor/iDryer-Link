@@ -53,6 +53,7 @@ static const iDryer::Config CFG = {
     .hasAirTemp        = true,
     .hasAirHumidity    = true,
     .hasHeaterTemp     = true,
+    .hasServo          = true,  // заслонка сушилки (привод на стороне контроллера)
     .allowHa           = true,
     .allowBambu        = false,
     .allowMoonraker    = false,
