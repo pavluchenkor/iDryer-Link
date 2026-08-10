@@ -355,6 +355,10 @@ static void onStatus(const UartStatusPayload& p, const UartFrameHeader&) {
         s_link.status.targetTempC[e.unitId]= e.targetTempC10 / 10.0f;
         s_link.status.durationS[e.unitId]  = (uint32_t)e.durationMinutes * 60u;
         s_link.status.elapsedS[e.unitId]   = e.elapsedSeconds;
+        // Номер сессии считает RP2040 (пер-юнитовый счётчик в EEPROM). Link его
+        // только транслирует: свой счётчик в RAM обнулялся бы при каждом ребуте
+        // ESP32 и рвал живую сессию в БД (см. publishStatusNow в SDK).
+        s_link.status.sessionNum[e.unitId] = e.sessionNum;
     }
     // Зеркалим device-wide флаг из RP2040 в SDK. Setter триггерит немедленный
     // publishStatusNow при изменении.

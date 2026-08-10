@@ -1,6 +1,6 @@
 #include <Arduino.h>
 
-#define VERSION_MAJOR 2 //! Поменять, сформировать меню, не наоборот! (обновление меню привязано к MAJOR)
+#define VERSION_MAJOR 3 //! Поменять, сформировать меню, не наоборот! (обновление меню привязано к MAJOR)
 #define VERSION_MINOR 0
 #define VERSION_PATCH 0
 

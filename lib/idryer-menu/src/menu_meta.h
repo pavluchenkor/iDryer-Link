@@ -7,7 +7,7 @@
 
 #define MENU_META_COUNT 201
 #define MENU_LANG_COUNT 2
-#define MENU_SERIALIZED_MAX_SIZE 26257
+#define MENU_SERIALIZED_MAX_SIZE 26357
 
 typedef enum {
     META_SUBMENU = 0,
@@ -811,15 +811,15 @@ static const MenuMeta g_menu_meta[MENU_META_COUNT] = {
     // [190] drying_session_count
     { 190, { "СУШКА", "DRYING" }, { nullptr, nullptr },
       META_VALUE, 189, -1, 0,
-      META_VT_U16, 0.0f, 65535.0f, 1.0f, META_SCOPE_GLOBAL, nullptr },
+      META_VT_U16, 0.0f, 65535.0f, 1.0f, META_SCOPE_PER_UNIT, nullptr },
     // [191] storage_session_count
     { 191, { "ХРАНЕНИЕ", "STORAGE" }, { nullptr, nullptr },
       META_VALUE, 189, -1, 0,
-      META_VT_U16, 0.0f, 65535.0f, 1.0f, META_SCOPE_GLOBAL, nullptr },
+      META_VT_U16, 0.0f, 65535.0f, 1.0f, META_SCOPE_PER_UNIT, nullptr },
     // [192] profile_session_count
     { 192, { "ПРОФИЛЬ", "PROFILE" }, { nullptr, nullptr },
       META_VALUE, 189, -1, 0,
-      META_VT_U16, 0.0f, 65535.0f, 1.0f, META_SCOPE_GLOBAL, nullptr },
+      META_VT_U16, 0.0f, 65535.0f, 1.0f, META_SCOPE_PER_UNIT, nullptr },
     // [193] hardware_config
     { 193, { "КОНФИГУРАЦИЯ ПОРТОВ", "PORT CONFIG" }, { nullptr, nullptr },
       META_SUBMENU, 186, 194, 3,
