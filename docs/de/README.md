@@ -54,7 +54,7 @@ Der Web-Flasher befindet sich unter https://install.idryer.org/
 
 ## Verbindung mit dem Portal
 
-- Klicken Sie auf die Schaltfläche **Start Claim**. Es erscheint eine Zeichenkette `PIN:123456` — dies ist die PIN mit einer Gültigkeitsdauer von etwa 5 Minuten.
+- Klicken Sie auf die Schaltfläche **Start Claim**. Es erscheint eine Zeichenkette `PIN:12345678` — dies ist die PIN mit einer Gültigkeitsdauer von 10 Minuten.
 - Rufen Sie https://portal.idryer.org → „Gerät hinzufügen" → auf und geben Sie die PIN ein. Nach erfolgreicher Bindung wird das Gerät in der Liste angezeigt.
 - Trennen Sie USB ab und verbinden Sie Link über RJ45 mit dem Controller.
 - Schalten Sie die Stromversorgung des iDryer ein

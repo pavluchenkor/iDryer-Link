@@ -54,7 +54,7 @@ UART_TX_PIN 7 (白绿色)
 
 ## 连接到门户
 
-- 点击 **Start Claim** 按钮。将显示字符串 `PIN:123456` — 这是 PIN，有效期约 5 分钟。
+- 点击 **Start Claim** 按钮。将显示字符串 `PIN:12345678` — 这是 PIN，有效期 10 分钟。
 - 前往 https://portal.idryer.org → "添加设备" → 输入 PIN。设备绑定成功后将显示在列表中。
 - 断开 USB 连接并通过 RJ45 将 Link 连接到控制器。
 - 打开 iDryer 电源

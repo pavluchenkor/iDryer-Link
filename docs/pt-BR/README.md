@@ -54,7 +54,7 @@ O programador web está em https://install.idryer.org/
 
 ## Conexão ao portal
 
-- Clique no botão **Start Claim**. Uma string `PIN:123456` será exibida — este é o PIN, válido por ~5 minutos.
+- Clique no botão **Start Claim**. Uma string `PIN:12345678` será exibida — este é o PIN, válido por 10 minutos.
 - Acesse https://portal.idryer.org → "Adicionar dispositivo" → insira o PIN. Após vincular com sucesso, o dispositivo aparecerá na lista.
 - Desconecte a USB e conecte Link ao controlador via RJ45.
 - Ligue a alimentação do iDryer

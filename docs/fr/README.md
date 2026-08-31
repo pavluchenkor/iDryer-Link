@@ -54,7 +54,7 @@ Le flasheur web se trouve sur https://install.idryer.org/
 
 ## Connexion au portail
 
-- Cliquez sur le bouton **Start Claim**. Une chaîne `PIN:123456` apparaîtra — c'est le PIN, valide environ 5 minutes.
+- Cliquez sur le bouton **Start Claim**. Une chaîne `PIN:12345678` apparaîtra — c'est le PIN, valide 10 minutes.
 - Accédez à https://portal.idryer.org → « Ajouter un appareil » → entrez le PIN. Après un appairage réussi, l'appareil apparaîtra dans la liste.
 - Débranchez l'USB et connectez Link au contrôleur via RJ45.
 - Allumez iDryer
