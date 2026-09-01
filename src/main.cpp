@@ -305,6 +305,7 @@ static void onHello(const UartHelloPayload& p, const UartFrameHeader&) {
     auto result = s_link.setMcuSerial(p.mcuSerial);
     s_link.setMcuFirmwareVersion(p.firmwareVersion);
     s_link.setMcuHardwareVersion(p.hardwareVersion);  // железо контроллера → info.mcuHardwareVersion
+    s_link.setMcuWorkTimeCounter(p.workTimeCounter);  // наработка сушилки (RP2040) → info.workTimeCounter
 
     if (result == iDryer::McuSerialResult::Mismatch) {
         // Different RP2040 connected — signal error to controller via UART.
