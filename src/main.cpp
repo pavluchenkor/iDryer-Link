@@ -495,6 +495,12 @@ static void registerCommands() {
         sendActionCommand(cmd);
     });
 
+    // binding-v3: портал отвязал устройство (retained REVOKE на commands/revoke)
+    // → стереть секрет из NVS и вернуться к ожиданию токена привязки (SETUP).
+    s_link.onCommand("revoke", [](JsonObjectConst) {
+        s_link.handleRevoke();
+    });
+
     s_link.onCommand("clear_errors", [](JsonObjectConst data) {
         // Бэкенд может слать unitId как строку "U1" — ArduinoJson не конвертирует в uint8_t,
         // возвращает 0xFF. RP2040 отклоняет unitId >= NUM_UNITS, поэтому при 0xFF чистим все юниты.
