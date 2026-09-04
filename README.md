@@ -55,3 +55,18 @@ Technical materials are kept in a separate section:
 - [Staging](docs/developer/STAGING.md)
 - [Developer tools](docs/developer/TOOLS.md)
 - [Documentation map](docs/guide/README.md)
+
+## License
+
+Licensed under the Apache License, Version 2.0 — see [LICENSE](LICENSE) and
+[NOTICE](NOTICE).
+
+You may use, modify, distribute and sell this software, including for
+commercial purposes.
+
+The license does not grant rights to the iDryer name. Community projects are
+welcome and the naming policy is permissive — see
+[TRADEMARKS.md](https://github.com/pavluchenkor/idryer-core/blob/main/TRADEMARKS.md).
+
+Hardware design and mechanical documentation are licensed separately and are
+not covered by this license.
