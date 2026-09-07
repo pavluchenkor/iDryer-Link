@@ -443,8 +443,13 @@ static void onLog(const uint8_t* payload, uint8_t length) {
 }
 
 static void onClaimStart(const UartFrameHeader&) {
-    HAL_LOG_INFO("UART", "ClaimStart from MCU");
-    s_link.requestClaim();
+    // binding-v3: привязку начинает владелец из приложения, не устройство.
+    // Кнопка в меню RP2040 пока есть — отвечаем состоянием, чтобы контроллер
+    // не ждал PIN, которого больше не будет.
+    HAL_LOG_INFO("UART", "ClaimStart from MCU — ignored (binding-v3: app owns pairing)");
+    UartClaimStatusPayload sp{};
+    sp.status = s_link.isBound() ? UartClaimStatus::Claimed : UartClaimStatus::Error;
+    s_uart.sendClaimStatus(sp);
 }
 
 static void onUartError(const UartErrorPayload& p, bool remote) {
@@ -722,16 +727,6 @@ void setup() {
 
     s_link.onDiagnostic([](const char* message) {
         Serial.println(message);
-    });
-
-    s_link.onClaimPin([](const char* pin, uint32_t exp) {
-        Serial.printf("CLAIM_PIN:%s:%lu\n", pin, exp);
-        Serial.flush();
-        UartClaimStatusPayload sp{};
-        sp.status = UartClaimStatus::WaitingClaim;
-        strncpy(sp.pin, pin, sizeof(sp.pin) - 1);
-        sp.remainingSeconds = exp;
-        s_uart.sendClaimStatus(sp);
     });
 
     s_link.setWaitForMcuSerial(true);
