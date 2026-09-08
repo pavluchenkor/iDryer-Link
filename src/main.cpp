@@ -61,6 +61,9 @@ static const iDryer::Config CFG = {
     .telemetryPeriodIdleMs = 60000,
     .statusPeriodMs        = 60000,  // сверка; изменения mode/target уходят сразу (SDK)
     .statusPeriodIdleMs    = 300000,
+    // Сушилка: прерывание портит сушку и оставляет филамент под нагревом —
+    // обновление ждёт простоя.
+    .otaInterrupt = iDryer::OTA_INTERRUPT_DRYER_V3,
     .hardwareVersion   = HW_LINK,
     .firmwareVersion   = VERSION_STR,
     .model             = "iDryer",

@@ -52,10 +52,13 @@ def _chip_family() -> str:
 
 def _board_name() -> str:
     name = _env_name
-    if name.endswith("-prod"):
-        name = name[:-5]
-    elif name.endswith("-stage"):
-        name = name[:-6]
+    # Стендовые профили (-local, -local-auth, -dev) отличаются от prod только
+    # адресами портала и брокера, плата у них та же. Имя платы должно совпадать
+    # с prod, иначе портал не сматчит сборку с железом при OTA. Публикуются они
+    # только вручную, через IDRYER_FLASHER_FORCE.
+    for suffix in ("-local-auth", "-local-dev", "-local", "-dev", "-prod", "-stage"):
+        if name.endswith(suffix):
+            return name[: -len(suffix)]
     return name
 
 
@@ -195,6 +198,12 @@ def copy_firmware(source, target, env):
     release_tag = _release_tag_for_version(version)
 
     slot = "stage" if _env_name.endswith("-stage") else "prod"
+    # Стендовая сборка (принудительная публикация без ветки main и тега) едет в
+    # отдельный слот 'debug'. Портал такие сборки в каталоге показывает, но на
+    # парк не раскатывает — только ручная отправка одному устройству. Иначе
+    # прошивка со стенда лежала рядом с релизной и была доступна всем.
+    if os.environ.get("IDRYER_FLASHER_FORCE", "").strip().lower() in ("1", "true", "yes"):
+        slot = "debug"
 
     files = {
         "firmware.bin":    _build_dir / "firmware.bin",
@@ -215,17 +224,27 @@ def copy_firmware(source, target, env):
             print(f"  {YELLOW}[FIRMWARE] WARNING: {src} not found, skipping{RESET}")
     print(f"  [FIRMWARE] → {local_dest}")
 
-    # Flasher-portal
-    flasher_portal_allowed = branch in ("main", "master")
-    if not flasher_portal_allowed:
-        print(f"  {YELLOW}[FIRMWARE] branch '{branch}' is not release → flasher-portal skipped{RESET}")
-        print(f"  {GREEN}[FIRMWARE] ✅ {_env_name} local done{RESET}")
-        return
+    # Flasher-portal.
+    # Обычный путь — только релиз: ветка main/master И тег vX.Y.Z на HEAD,
+    # совпадающий с версией прошивки. Для стенда (проверка полного цикла
+    # «прошил флешером → обновился по воздуху» до мержа и тегов) есть
+    # IDRYER_FLASHER_FORCE=1: пропускает эти две проверки, всё остальное —
+    # копирование, манифест, versions.json — делает ровно как при релизе.
+    force = os.environ.get("IDRYER_FLASHER_FORCE", "").strip().lower() in ("1", "true", "yes")
+    if force:
+        print(f"  {YELLOW}[FIRMWARE] IDRYER_FLASHER_FORCE=1 → publishing v{version} without main/tag{RESET}")
 
-    if not release_tag:
-        print(f"  {YELLOW}[FIRMWARE] no tag v{version} on HEAD → flasher-portal skipped{RESET}")
-        print(f"  {GREEN}[FIRMWARE] ✅ {_env_name} local done{RESET}")
-        return
+    if not force:
+        flasher_portal_allowed = branch in ("main", "master")
+        if not flasher_portal_allowed:
+            print(f"  {YELLOW}[FIRMWARE] branch '{branch}' is not release → flasher-portal skipped{RESET}")
+            print(f"  {GREEN}[FIRMWARE] ✅ {_env_name} local done{RESET}")
+            return
+
+        if not release_tag:
+            print(f"  {YELLOW}[FIRMWARE] no tag v{version} on HEAD → flasher-portal skipped{RESET}")
+            print(f"  {GREEN}[FIRMWARE] ✅ {_env_name} local done{RESET}")
+            return
 
     portal_root = _idryer_flasher_portal_root()
     if not portal_root:
