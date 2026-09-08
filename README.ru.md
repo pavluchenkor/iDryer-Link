@@ -1,57 +1,150 @@
+<div align="center">
+
+<img src="docs/img/iDryer_logo_small.png" width="220" alt="iDryer">
+
 # iDryer Link
 
-**iDryer Link** — модуль связи для сушилки iDryer. Он подключается к контроллеру через RJ45-разъём и выводит устройство в интернет: после настройки Wi-Fi сушилка может работать с порталом iDryer и мобильным приложением.
+**Wi-Fi-модуль для сушилки iDryer. Портал, мобильное приложение, обновление прошивки по воздуху.**
 
-RJ45 здесь используется как разъём питания и UART. **Это не сетевой порт**: не подключайте Link к коммутатору или роутеру.
+[![Документация](https://img.shields.io/badge/docs-idryer.org-e7352c)](https://docs.idryer.org/projects/idryer/link/) [![Telegram](https://img.shields.io/badge/Telegram-iDryer-2ca5e0)](https://t.me/iDryer) [![Discord](https://img.shields.io/badge/Discord-join-5865f2)](https://discord.gg/jGce5eeHHz) [![Лицензия](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
-![iDryer Link](docs/img/link2.png)
+<img src="docs/img/link2.png" width="640" alt="iDryer Link">
 
-## Что даёт Link
+</div>
 
-- Подключение iDryer к интернету через Wi-Fi.
-- Привязку устройства к порталу [portal.idryer.org](https://portal.idryer.org).
-- Работу с мобильным приложением iDryer.
-- Обновление прошивки через веб-флешер.
-- Открытые схемы подключения и CAD-файл корпуса.
+---
 
-## Приложение и портал
+## Что это
+
+Плата на ESP32, которая подключается к контроллеру сушилки через разъём RJ45 и выводит устройство в сеть. После настройки Wi-Fi сушилка появляется в портале и в мобильном приложении.
+
+> **Разъём RJ45 здесь не сетевой.** Через него передаются питание и UART. Никогда не подключайте iDryer Link к коммутатору или роутеру.
+
+## Какую задачу решает
+
+Контроллер сушилки работает автономно: кнопки и экран на самом устройстве. iDryer Link добавляет к нему беспроводной интерфейс, и сушилка перестаёт быть вещью в себе.
+
+Через этот интерфейс идёт всё остальное:
+
+- **Телеметрия в портал и приложение.** Температура, влажность, вес катушки, состояние сушки в реальном времени, откуда угодно.
+- **RFID и база катушек.** Сушилка читает метку, портал ведёт карточку: материал, остаток по весам, история сушек. Данные записываются обратно на метку.
+- **История сессий.** Каждая сушка сохраняется: график, сколько влаги ушло, стабильность температуры, вес.
+- **Обновление прошивки по воздуху.** И самого Link, и контроллера.
+- **Интеграции без проводов.** Раз сушилка уже в сети, к ней подключаются Klipper через Moonraker, Home Assistant, Bambu Lab. Сушилка знает о состоянии принтера, а принтер о сушилке.
+
+## Для кого
+
+- **Вы ставите катушку, и сушилка её узнаёт.** Метка, вес, карточка в портале. Ничего не вводить руками.
+- **Вы знаете, что у вас есть.** Все катушки в одной базе: что сухое, где лежит, сколько грамм осталось. Перед большой печатью не нужно перебирать коробки.
+- **Вы запускаете сушку с телефона.** Выбираете пресет или режим по дороге домой, к приходу материал готов. Уведомление о завершении приходит само.
+- **Вы печатаете под Klipper.** Сушилка появляется в Moonraker без единого провода до принтера. Klipper видит её, макросы могут с ней работать.
+- **У вас Home Assistant.** Ещё одно устройство в доме: сущности, автоматизации, дашборд.
+- **Вы любите, когда всё открыто.** Схема, протокол, прошивка в репозиториях. Плата за полтора доллара, прошивка через браузер. Хотите иначе, дорабатывайте.
+
+## Возможности
+
+- **Портал и приложение.** Сушилка появляется в [portal.idryer.org](https://portal.idryer.org) и в мобильном приложении для iOS и Android.
+- **Прошивка через браузер.** Первая прошивка выполняется с [install.idryer.org](https://install.idryer.org), без установки инструментов. Дальше обновления приходят по воздуху.
+- **Любая плата ESP32.** Прошивка собирается под любую ESP32, в крайнем случае с небольшими модификациями.
+
+## Как это выглядит
+
+Портал в браузере: обзор устройства и учёт катушек.
+
+<div align="center">
+
+<img src="docs/img/portal1.png" width="420" alt="Портал: обзор устройства"> <img src="docs/img/portal2.png" width="420" alt="Портал: учёт катушек">
+
+</div>
+
+Мобильное приложение: список устройств и статистика, карточка сушилки с пресетами, отчёт по завершённой сессии.
+
+<div align="center">
+
+<img src="docs/img/app-01-home.png" width="230" alt="Приложение: главный экран"> <img src="docs/img/app-02-device.png" width="230" alt="Приложение: карточка устройства"> <img src="docs/img/app-03-session.png" width="230" alt="Приложение: отчёт по сессии">
+
+</div>
 
 - [iDryer в App Store](https://apps.apple.com/app/idryer/id6760609044)
 - [iDryer в Google Play](https://play.google.com/store/apps/details?id=org.idryer.mobile)
-- [Портал iDryer](https://portal.idryer.org)
-- [Веб-флешер](https://install.idryer.org)
 
-![Панель iDryer Portal](docs/img/portal1.png)
+## Место в экосистеме
 
-![Хранилище катушек в iDryer Portal](docs/img/portal2.png)
+| Слой | Что делает | Репозиторий |
+|---|---|---|
+| Контроллер | Нагрев, вентиляция, датчики, весы, RFID | [iDryerControllerV2](https://github.com/pavluchenkor/iDryerControllerV2) |
+| Связь | Wi-Fi, портал, приложение — **этот репозиторий** | idryer-link |
+| Связь с экраном | То же плюс сенсорный дисплей | [iDryer Touch](https://github.com/pavluchenkor/idryer-touch) |
+| Протокол | Контракт MQTT и UART, общий для всех | [idryer-core](https://github.com/pavluchenkor/idryer-core) |
+| Облако | Портал, приложение, интеграции | [portal.idryer.org](https://portal.idryer.org/) |
+
+iDryer Link и iDryer Touch отличаются только наличием экрана. Протокол и функции связи одинаковы.
+
+## Что понадобится (BOM)
+
+| Компонент | Кол-во | Примечание | Где взять |
+|---|---|---|---|
+| Плата ESP32-C3 Super Mini | 1 | подходит также ESP32-C3 DevKitM | [ссылка](https://es.aliexpress.com/w/wholesale-es32-c3-super-mini.html) |
+| Кабель с разъёмом RJ45 | 1 | питание и UART, не сеть; собирается самостоятельно | [схема RJ45](docs/img/RJ45.png), [схема подключения](docs/img/wiring.png) |
+| Кабель USB Type-C | 1 | для первой прошивки, подойдёт любой с передачей данных | — |
+| Корпус модуля | 1 | печать на 3D-принтере | [link-case.stp](CAD/link-case.stp) |
+| Контроллер сушилки iDryer | 1 | с актуальной прошивкой | [store.idryer.org](https://store.idryer.org/) |
+
+## Сложность и стоимость
+
+| | |
+|---|---|
+| Пайка | нужна: обжать и распаять кабель RJ45 |
+| 3D-печать | нужен корпус модуля |
+| Опасное напряжение | нет, только 5 В по USB |
+| Навыки | собрать кабель по схеме, прошить через браузер |
+| Время | около часа |
+| Стоимость платы | ~$1,5 |
 
 ## Быстрый старт
 
-1. Соберите кабель RJ45 по [схеме из руководства](docs/README.ru.md#как-подключить-к-контроллеру).
-2. Подключите провода к плате ESP32-C3.
-3. Прошейте Link через [install.idryer.org](https://install.idryer.org), следуйте инструкции на сайте.
-
-Подробная инструкция: [docs/README.ru.md](docs/README.ru.md)
-
-## Схемы и материалы
+1. **Соберите кабель RJ45** по [схеме RJ45](docs/img/RJ45.png) и [схеме подключения](docs/img/wiring.png). Разъём используется как питание и UART.
+2. **Подключите провода** к плате ESP32. Пинауты: [ESP32-C3 Super Mini](docs/img/ESP32-C3-Super-Mini-pinout-low.jpg), [ESP32-C3 Zero Waveshare](docs/img/ESP32-C3-ZERO-Waveshare-pinout-low.jpg).
+3. **Прошейте через браузер** на [install.idryer.org](https://install.idryer.org/).
+4. **Подключите к Wi-Fi** и привяжите устройство на [portal.idryer.org](https://portal.idryer.org/).
+5. **Готово.** Сушилка появится в портале и в приложении.
 
 ![Подключение Link](docs/img/link1.png)
 
-- [Русское руководство](docs/README.ru.md)
-- [English guide](docs/README.en.md)
-- [Схема RJ45](docs/img/RJ45.png)
-- [Схема подключения](docs/img/wiring.png)
-- [Плата ESP32-C3 Super Mini](docs/img/esp32superMini.png)
-- [Пинаут ESP32-C3 Super Mini](docs/img/ESP32-C3-Super-Mini-pinout-low.jpg)
-- [Пинаут ESP32-C3 Zero Waveshare](docs/img/ESP32-C3-ZERO-Waveshare-pinout-low.jpg)
-- [CAD-файл корпуса](docs/cad/link-case.stp)
+Подробная инструкция: [docs/ru/README.md](docs/ru/README.md) · [English guide](docs/en/README.md) · [docs.idryer.org](https://docs.idryer.org/projects/idryer/link/).
 
-## Для разработчиков
+## Статус
 
-Технические материалы перенесены в отдельный раздел:
+Рабочая прошивка: связь с порталом и приложением, привязка устройства, обновление по воздуху, интеграции с Home Assistant, Bambu Lab и Moonraker.
 
-- [Справка по репозиторию](docs/developer/repository-workflow.md)
-- [Post-build scripts](docs/developer/POST_BUILD_SCRIPTS.md)
-- [Staging](docs/developer/STAGING.md)
-- [Инструменты разработчика](docs/developer/TOOLS.md)
-- [Навигация по документации](docs/guide/README.md)
+Развивается вместе с прошивкой контроллера: новые режимы контроллера появляются и в портале.
+
+## Платы и протокол
+
+Прошивка собирается под любую ESP32, в крайнем случае с небольшими модификациями. Готовые среды сборки перечислены в `platformio.ini`.
+
+Протокол общий для экосистемы и определён в `idryer-core` (`contracts/mqtt_contract.yaml`). Изменения вносятся там и генерацией расходятся по прошивкам и порталу. В этом репозитории протокол не правится.
+
+## Лицензия
+
+Код — [Apache License 2.0](LICENSE), [NOTICE](NOTICE).
+
+Имя iDryer лицензией не покрывается — [TRADEMARKS.md](https://github.com/pavluchenkor/idryer-core/blob/main/TRADEMARKS.md).
+
+Конструкция железа лицензируется отдельно.
+
+## Помощь
+
+- [Telegram](https://t.me/iDryer)
+- [Discord](https://discord.gg/jGce5eeHHz)
+- [Документация](https://docs.idryer.org/projects/idryer/link/)
+
+Инструкции и разборы на канале: [YouTube](https://www.youtube.com/@iDryerProject) · [Rutube](https://rutube.ru/channel/34401569/)
+
+## Участие
+
+Собрали на другой плате, нашли расхождение в схеме, поправили документацию — заведите issue или пришлите pull request.
+
+## Дальше
+
+[Прошейте плату через браузер](https://install.idryer.org/).
