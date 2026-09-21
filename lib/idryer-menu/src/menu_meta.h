@@ -67,7 +67,7 @@ static const MenuMeta g_menu_meta[MENU_META_COUNT] = {
     // [4] dry_time
     { 4, { "ВРЕМЯ", "TIME" }, { "мин", "min" },
       META_VALUE, 2, -1, 0,
-      META_VT_U16, 0.0f, 600.0f, 1.0f, META_SCOPE_PER_UNIT, nullptr },
+      META_VT_U16, 0.0f, 2880.0f, 1.0f, META_SCOPE_PER_UNIT, nullptr },
     // [5] dry_start
     { 5, { "СТАРТ", "START" }, { nullptr, nullptr },
       META_ACTION, 2, -1, 0,
