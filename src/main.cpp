@@ -22,6 +22,7 @@
 #include <hal/hal_arduino.h>
 #include <local_access/device_publisher.h>
 #include <ota_receiver.h>  // OtaReceiver: target=esp + UART-proxy для target=rp2040
+#include <platform/arduino/EspTouchProvisioner.h>
 
 #include "version.h"
 
@@ -789,11 +790,31 @@ void setup() {
     HAL_LOG_INFO("MAIN", "iDryer Link v2 ready, fw=%s", VERSION_STR);
 }
 
+// Режим настройки Wi-Fi → контроллеру: его LCD показывает QR. Обычный heartbeat
+// идёт через s_link.every(), а планировщик до подъёма сети не крутится, поэтому
+// здесь отдельная отправка — только пока ESP слушает эфир: сразу при входе в
+// режим и дальше с периодом heartbeat.
+static void sendWifiSetupHeartbeat() {
+    static bool     s_wasSetup = false;
+    static uint32_t s_lastMs   = 0;
+    const bool     setup = idryer::EspTouchProvisioner::instance().isActive();
+    const uint32_t now   = millis();
+    if (setup && (!s_wasSetup || now - s_lastMs >= idryer::UART_HEARTBEAT_MS)) {
+        UartHeartbeatPayload hb{};
+        hb.uptimeSeconds = now / 1000;
+        hb.cloudState    = idryer::UartLinkCloudState::WifiSetup;
+        s_uart.sendHeartbeat(hb);
+        s_lastMs = now;
+    }
+    s_wasSetup = setup;
+}
+
 void loop() {
     s_link.loop();
     s_uart.loop();
     // Paired OTA Этап 5: периодически шлём RP актуальный espReady-статус.
     idryer::OtaReceiver::instance().tick(millis());
+    sendWifiSetupHeartbeat();
 
     // Periodic HelloRequest to RP2040 until it responds (max 12 attempts, every 5s).
     // Needed when RP2040 was already running before ESP32 booted and its initial
