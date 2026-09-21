@@ -34,7 +34,9 @@
 
 #include <menu_commands.h>
 #include <menu_cache.h>
+#include <menu_ids.h>        // MENU_* — символьные id пунктов меню
 #include <menu_publisher.h>  // idryer::MenuPublisher — pre-allocated публикатор меню
+#include <card/card_menu_bridge.h>  // пределы параметров карточки из меню
 
 using namespace idryer;
 
@@ -86,6 +88,7 @@ static bool s_prevOnline = false;
 static int  s_haDryTemp          = 60;
 static int  s_haDryTime          = 240;
 static bool s_haControlsReady    = false;
+static bool s_cardActionsReady   = false;
 
 // Буфер для собранного меню выделяется на heap по требованию (publishConfig).
 // В .bss держать ~38 КБ нельзя — фрагментирует heap, ломает TLS-handshake mbedtls.
@@ -153,6 +156,10 @@ static void publishConfigDelta(const char* json, uint16_t len) {
 // MENU_FULL_JSON_BUF_SIZE на каждый вызов (фрагментировала heap при
 // MQTT-reconnect'ах). См. menu_publisher.h.
 static idryer::MenuPublisher s_menuPub;
+
+// Действия карточки объявляются после первого меню (см. publishConfig), а
+// команды на RP2040 шлют через sendActionCommand — определено ниже.
+static void declareCardActions();
 
 static void publishConfig(const char* json, uint16_t len) {
     if (!json || len == 0) {
@@ -224,6 +231,13 @@ static void publishConfig(const char* json, uint16_t len) {
 
         s_link.ha().republishAll();
     }
+
+    // Действия карточки — после первого меню от контроллера: до него пределы
+    // и значения по умолчанию взять неоткуда.
+    if (!s_cardActionsReady) {
+        s_cardActionsReady = true;
+        declareCardActions();
+    }
 }
 
 // Публикует результат write_rfid в MQTT топик rfid/write_result.
@@ -273,6 +287,92 @@ static uint8_t actionOriginFlag() {
 }
 static void sendActionCommand(const UartCmdPayload& cmd) {
     s_uart.sendCommand(cmd, true, actionOriginFlag());
+}
+
+// ── Действия карточки ────────────────────────────────────────────────────────
+// Параметры приходят из карточки на один запуск и уходят в команду старта как
+// есть; в меню не пишутся. Пределы и значения по умолчанию SDK берёт из меню
+// (card_menu_bridge.h) и уже зажал в них то, что пришло. Колбэки вызываются
+// из обработки invoke, поэтому origin (облако / LAN) пробрасывается так же,
+// как у остальных action-команд.
+
+static void cardStartDrying(uint8_t unit, JsonObjectConst args) {
+    UartCmdPayload cmd{};
+    cmd.command     = UartCmdCode::Start;
+    cmd.targetState = (uint8_t)UartDryerMode::Drying;
+    cmd.unitId      = unit;
+    cmd.arg0        = (uint32_t)lroundf(args["temperature"].as<float>() * 10.0f);
+    cmd.arg1        = (uint32_t)lroundf(args["duration"].as<float>());
+    sendActionCommand(cmd);
+}
+
+static void cardStartStorage(uint8_t unit, JsonObjectConst args) {
+    UartCmdPayload cmd{};
+    cmd.command     = UartCmdCode::Start;
+    cmd.targetState = (uint8_t)UartDryerMode::Storage;
+    cmd.unitId      = unit;
+    cmd.arg0        = (uint32_t)lroundf(args["temperature"].as<float>() * 10.0f);
+    cmd.arg1        = (uint32_t)lroundf(args["humidity"].as<float>());
+    sendActionCommand(cmd);
+}
+
+static void cardStartProfile(uint8_t unit, JsonObjectConst args) {
+    UartProfilePayload p{};
+    p.unitId      = unit;
+    p.startStage  = (uint8_t)lroundf(args["start_stage"].as<float>());
+    p.totalStages = 0;
+    for (JsonObjectConst st : args["stages"].as<JsonArrayConst>()) {
+        if (p.totalStages >= 10) break;
+        const uint8_t i = p.totalStages++;
+        p.stages[i].temp = (uint16_t)lroundf(st["temperature"].as<float>() * 10.0f);
+        p.stages[i].ramp = (uint16_t)st["ramp"].as<int>();
+        p.stages[i].hold = (uint16_t)st["hold"].as<int>();
+    }
+    if (p.totalStages == 0) return;
+    if (p.startStage >= p.totalStages) p.startStage = 0;
+    s_uart.sendProfileCommand(p, true, actionOriginFlag());
+}
+
+static void cardStop(uint8_t unit, JsonObjectConst) {
+    UartCmdPayload cmd{};
+    cmd.command = UartCmdCode::Stop;
+    cmd.unitId  = unit;
+    sendActionCommand(cmd);
+}
+
+static void cardFind(uint8_t unit, JsonObjectConst) {
+    UartCmdPayload cmd{};
+    cmd.command = UartCmdCode::Find;
+    cmd.unitId  = unit;
+    sendActionCommand(cmd);
+}
+
+static void cardClearErrors(uint8_t unit, JsonObjectConst) {
+    UartCmdPayload cmd{};
+    cmd.command = UartCmdCode::ClearErrors;
+    cmd.unitId  = unit;
+    sendActionCommand(cmd);
+}
+
+static void declareCardActions() {
+    auto& card = s_link.card();
+    idryer::card_menu::attach(card);
+    card.action("drying", "DRYING", cardStartDrying)
+        .name("ru", "Сушка").name("en", "Drying")
+        .param("temperature", "target_temperature", MENU_DRY_TEMP).ceiling(MENU_AIR_MAX_TEMP)
+        .param("duration", "duration", MENU_DRY_TIME);
+    card.action("storage", "STORAGE", cardStartStorage)
+        .name("ru", "Хранение").name("en", "Storage")
+        .param("temperature", "target_temperature", MENU_STORAGE_TEMP).ceiling(MENU_AIR_MAX_TEMP)
+        .param("humidity", "target_humidity", MENU_STORAGE_HUM);
+    card.action("profile", "PROFILE", cardStartProfile)
+        .name("ru", "Профиль").name("en", "Profile")
+        .stages("stages", "stages", MENU_STAGE_01_TEMP).ceiling(MENU_AIR_MAX_TEMP)
+        .param("start_stage", "start_stage", 0, 9, 1, 0);
+    card.action("stop", "IDLE", cardStop).name("ru", "Стоп").name("en", "Stop");
+    // Без смены режима — постоянные кнопки шапки карточки.
+    card.action("find", nullptr, cardFind).deviceClass("identify");
+    card.action("clear_errors", nullptr, cardClearErrors).deviceClass("clear_errors");
 }
 
 static void onHello(const UartHelloPayload& p, const UartFrameHeader&) {
