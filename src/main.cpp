@@ -57,9 +57,6 @@ static const iDryer::Config CFG = {
     .hasAirHumidity    = true,
     .hasHeaterTemp     = true,
     .hasServo          = true,  // заслонка сушилки (привод на стороне контроллера)
-    .allowHa           = true,
-    .allowBambu        = false,
-    .allowMoonraker    = false,
     .telemetryPeriodMs     = 30000,
     .telemetryPeriodIdleMs = 60000,
     .statusPeriodMs        = 60000,  // сверка; изменения mode/target уходят сразу (SDK)
@@ -802,7 +799,28 @@ void setup() {
         // до перезагрузки. Лог будет в админке через publishMenuError.
     }
 
+#if IDRYER_WITH_HA
     s_link.integrationsManager()->setActive(idryer::cloud::ActiveIntegration::Ha);
+#endif
+
+    // [TEMP-TEST] читаем принтер через Moonraker и пишем в лог — эксперимент, не коммитить.
+    s_link.integrationsManager()->setMoonrakerStatusCallback(
+        [](void*, const idryer::cloud::MoonrakerStatus& st) {
+            HAL_LOG_INFO("MOONTEST",
+                         "printer=%s progress=%.0f%% nozzle=%.0f/%.0f bed=%.0f/%.0f "
+                         "chamber=%.1f/%.1f sensor=%d vc=%d file=%s dur=%us",
+                         st.printerState, st.progress, st.nozzleTemp, st.nozzleTarget,
+                         st.bedTemp, st.bedTarget, st.chamberTemperature, st.chamberTarget,
+                         (int)st.chamberHasSensor, (int)st.virtualChamberAvailable,
+                         st.filename[0] ? st.filename : "-", (unsigned)st.printDurationSeconds);
+        },
+        nullptr);
+    s_link.integrationsManager()->setChamberTargetCallback(
+        [](void*, float target, bool on) {
+            HAL_LOG_INFO("MOONTEST", "chamber target: %.1f °C on=%d", target, (int)on);
+        },
+        nullptr);
+
     registerCommands();
 
     // ESP32-C3: GPIO6/7 по умолчанию JTAG — сбрасываем перед Serial1.
