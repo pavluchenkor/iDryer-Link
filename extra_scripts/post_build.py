@@ -126,9 +126,24 @@ def _extract_version() -> str:
     m = re.search(r'#\s*define\s+VERSION_STR\s+"([^"]+)"', txt)
     if m:
         return m.group(1).strip()
-    major = re.search(r"#\s*define\s+VERSION_MAJOR\s+(\d+)", txt)
     minor = re.search(r"#\s*define\s+VERSION_MINOR\s+(\d+)", txt)
     patch = re.search(r"#\s*define\s+VERSION_PATCH\s+(\d+)", txt)
+
+    # Старшая цифра у сушилки живёт в меню контроллера и подставляется при
+    # сборке (copy_menu.py кладёт version.h MCU в lib/idryer-menu/src/).
+    # В src/version.h остаётся только fallback-значение, и скрипт публиковал
+    # прошивку под версией 1.x.y, хотя устройство рапортует 3.x.y — портал
+    # такую сборку считал понижением и обновление не предлагал.
+    menu_hdr = _proj_dir / "lib" / "idryer-menu" / "src" / "version.h"
+    major = None
+    try:
+        menu_txt = menu_hdr.read_text(encoding="utf-8")
+        major = re.search(r"#\s*define\s+VERSION_MAJOR\s+(\d+)", menu_txt)
+    except Exception:
+        pass
+    if major is None:
+        major = re.search(r"#\s*define\s+VERSION_MAJOR\s+(\d+)", txt)
+
     if major and minor and patch:
         return f"{major.group(1)}.{minor.group(1)}.{patch.group(1)}"
     return "0.0.0"
