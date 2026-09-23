@@ -25,7 +25,7 @@
 
 // Собственные версии LINK
 #define VERSION_MINOR 0
-#define VERSION_PATCH 100
+#define VERSION_PATCH 0
 
 #define STR_HELPER(x) #x
 #define STR(x) STR_HELPER(x)
