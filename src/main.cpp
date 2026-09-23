@@ -800,7 +800,9 @@ void setup() {
     }
 
 #if IDRYER_WITH_HA
-    s_link.integrationsManager()->setActive(idryer::cloud::ActiveIntegration::Ha);
+    // HA у link включена всегда: принтерных интеграций у него нет,
+    // а выключатель независим от выбора принтера.
+    s_link.integrationsManager()->setHaEnabled(true);
 #endif
 
     // [TEMP-TEST] читаем принтер через Moonraker и пишем в лог — эксперимент, не коммитить.
