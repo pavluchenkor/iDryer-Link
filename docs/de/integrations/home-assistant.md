@@ -4,7 +4,7 @@ Ein Trockner mit Link-Modul meldet sich in Home Assistant über **MQTT Discovery
 
 Nachfolgend: die Integration einschalten, prüfen und ein fertiges Karten-Layout, damit das Gerät wie auf dem Bild aussieht und nicht wie eine Liste von Entitäten.
 
-![Gerätekarten in Home Assistant](../../img/ha-card.png)
+![Gerätekarten in Home Assistant](../../img/link-ha-card.png)
 *Beide Kammern des Trockners auf dem Home-Assistant-Panel: Messwerte, Start von Trocknung und Lagerung, Wartung.*
 
 !!! note
@@ -30,14 +30,14 @@ Nachfolgend: die Integration einschalten, prüfen und ein fertiges Karten-Layout
 
 Die Einstellungen gehen über das lokale Netzwerk direkt an das Gerät — das Portal speichert sie nicht.
 
-![Das Fenster Home Assistant im Block „Integrationen“ auf dem Portal](../../img/ha-portal-integration.png)
+![Das Fenster Home Assistant im Block „Integrationen“ auf dem Portal](../../img/link-ha-portal-integration.png)
 *Die Adresse des Brokers, der Port und das Kennzeichen „Aktiviert“ — mehr braucht das Gerät nicht.*
 
 ## Schritt 2. Das Gerät in Home Assistant finden
 
 `Settings` → `Devices & services` → die Karte **MQTT** → klappen Sie im Abschnitt **Services** den Knoten des Brokers auf. Die iDryer-Geräte erscheinen unter Seriennummern der Form `DEVICE_*`.
 
-![iDryer-Geräte auf der Seite der MQTT-Integration](../../img/ha-mqtt-devices.png)
+![iDryer-Geräte auf der Seite der MQTT-Integration](../../img/link-ha-mqtt-devices.png)
 *Die Geräte unter dem Knoten des Brokers; beim Trockner ist die Anzahl der Entitäten zu sehen.*
 
 Öffnen Sie das Gerät: HA zeigt bereits die Messwerte und die Bedienelemente. Prüfen Sie, dass die Werte aktuell sind — sie werden zusammen mit der Telemetrie des Geräts aktualisiert.
@@ -194,7 +194,7 @@ views:
       icon_tap_action: *id005
 ```
 
-![Raw configuration editor mit dem eingefügten Layout](../../img/ha-raw-editor.png)
+![Raw configuration editor mit dem eingefügten Layout](../../img/link-ha-raw-editor.png)
 *Dasselbe Layout im Konfigurationseditor des Dashboards.*
 
 ### Die zweite Kammer

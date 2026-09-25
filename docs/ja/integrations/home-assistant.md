@@ -4,7 +4,7 @@ Link モジュールを搭載した乾燥機は、**MQTT Discovery** によっ�
 
 以下では、連携の有効化、動作確認、そして本機がエンティティの羅列ではなく画像のように表示されるためのカードレイアウトを説明します。
 
-![Home Assistant のデバイスカード](../../img/ha-card.png)
+![Home Assistant のデバイスカード](../../img/link-ha-card.png)
 *Home Assistant のダッシュボードに表示された乾燥機の両チャンバー: 測定値、乾燥と保管の開始、メンテナンス。*
 
 !!! note
@@ -30,14 +30,14 @@ Link モジュールを搭載した乾燥機は、**MQTT Discovery** によっ�
 
 設定はローカルネットワーク経由で本機に直接送信されます。ポータルは保存しません。
 
-![ポータルの「連携」ブロックにある Home Assistant のウィンドウ](../../img/ha-portal-integration.png)
+![ポータルの「連携」ブロックにある Home Assistant のウィンドウ](../../img/link-ha-portal-integration.png)
 *ブローカーのアドレス、ポート、「有効」のチェック — 本機に必要なのはこれだけです。*
 
 ## ステップ 2. Home Assistant でデバイスを探す
 
 `Settings` → `Devices & services` → **MQTT** のカード → **Services** セクションでブローカーのノードを展開します。iDryer の機器は `DEVICE_*` 形式のシリアル番号で表示されます。
 
-![MQTT 連携のページに表示された iDryer の機器](../../img/ha-mqtt-devices.png)
+![MQTT 連携のページに表示された iDryer の機器](../../img/link-ha-mqtt-devices.png)
 *ブローカーのノード配下にあるデバイス。乾燥機にはエンティティ数が表示されます。*
 
 デバイスを開くと、HA にはすでに測定値と操作要素が表示されています。値が更新されているか確認してください。値は本機のテレメトリに合わせて更新されます。
@@ -194,7 +194,7 @@ views:
       icon_tap_action: *id005
 ```
 
-![レイアウトを貼り付けた Raw configuration editor](../../img/ha-raw-editor.png)
+![レイアウトを貼り付けた Raw configuration editor](../../img/link-ha-raw-editor.png)
 *ダッシュボードの設定エディタに表示された同じレイアウト。*
 
 ### 2 番目のチャンバー

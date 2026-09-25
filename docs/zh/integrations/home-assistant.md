@@ -4,7 +4,7 @@
 
 下面是启用集成、检查以及现成的卡片布局，让设备显示成图中的样子，而不是一串实体列表。
 
-![Home Assistant 中的设备卡片](../../img/ha-card.png)
+![Home Assistant 中的设备卡片](../../img/link-ha-card.png)
 *Home Assistant 面板上干燥机的两个腔室：读数、启动烘干和存储、维护。*
 
 !!! note
@@ -30,14 +30,14 @@
 
 设置通过局域网直接发送到设备 —— 门户不保存它们。
 
-![门户「集成」区块中的 Home Assistant 窗口](../../img/ha-portal-integration.png)
+![门户「集成」区块中的 Home Assistant 窗口](../../img/link-ha-portal-integration.png)
 *代理地址、端口和「已启用」标记 —— 设备需要的全部内容。*
 
 ## 步骤 2. 在 Home Assistant 中找到设备
 
 `Settings` → `Devices & services` → **MQTT** 卡片 → 在 **Services** 部分展开代理节点。iDryer 设备以 `DEVICE_*` 形式的序列号显示。
 
-![MQTT 集成页面上的 iDryer 设备](../../img/ha-mqtt-devices.png)
+![MQTT 集成页面上的 iDryer 设备](../../img/link-ha-mqtt-devices.png)
 *代理节点下的设备；干燥机会显示实体数量。*
 
 打开设备：HA 已经显示读数和控制元素。检查数值是否在实时变化 —— 它们随设备遥测一起更新。
@@ -194,7 +194,7 @@ views:
       icon_tap_action: *id005
 ```
 
-![粘贴了布局的 Raw configuration editor](../../img/ha-raw-editor.png)
+![粘贴了布局的 Raw configuration editor](../../img/link-ha-raw-editor.png)
 *仪表板配置编辑器中的同一布局。*
 
 ### 第二个腔室

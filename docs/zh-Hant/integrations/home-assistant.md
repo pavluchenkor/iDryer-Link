@@ -4,7 +4,7 @@
 
 以下是啟用整合、檢查，以及現成的卡片版面配置，讓裝置呈現如圖所示的樣子，而不是一串實體清單。
 
-![Home Assistant 中的裝置卡片](../../img/ha-card.png)
+![Home Assistant 中的裝置卡片](../../img/link-ha-card.png)
 *Home Assistant 面板上乾燥機的兩個腔室：讀數、啟動乾燥與保存、維護。*
 
 !!! note
@@ -30,14 +30,14 @@
 
 設定會透過本機網路直接送到裝置——入口不會保存這些設定。
 
-![入口「整合」區塊中的 Home Assistant 視窗](../../img/ha-portal-integration.png)
+![入口「整合」區塊中的 Home Assistant 視窗](../../img/link-ha-portal-integration.png)
 *代理伺服器位址、連接埠和「啟用」標記——這就是裝置所需的全部內容。*
 
 ## 步驟 2. 在 Home Assistant 中找到裝置
 
 `Settings` → `Devices & services` → **MQTT** 卡片 → 在 **Services** 區段中展開代理伺服器節點。iDryer 裝置以 `DEVICE_*` 形式的序號顯示。
 
-![MQTT 整合頁面上的 iDryer 裝置](../../img/ha-mqtt-devices.png)
+![MQTT 整合頁面上的 iDryer 裝置](../../img/link-ha-mqtt-devices.png)
 *代理伺服器節點下的裝置；乾燥機處可看到實體數量。*
 
 開啟裝置：HA 已經顯示讀數與控制元件。請確認數值是即時的——它們會隨裝置的遙測一起更新。
@@ -194,7 +194,7 @@ views:
       icon_tap_action: *id005
 ```
 
-![貼上版面配置後的 Raw configuration editor](../../img/ha-raw-editor.png)
+![貼上版面配置後的 Raw configuration editor](../../img/link-ha-raw-editor.png)
 *儀表板設定編輯器中的同一份版面配置。*
 
 ### 第二個腔室

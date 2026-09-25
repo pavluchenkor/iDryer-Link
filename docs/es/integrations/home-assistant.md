@@ -4,7 +4,7 @@ El secador con módulo Link se publica en Home Assistant mediante **MQTT Discove
 
 A continuación: activación de la integración, comprobación y una disposición de tarjeta lista para usar, para que el dispositivo se vea como en la imagen y no como una lista de entidades.
 
-![Tarjetas de dispositivos en Home Assistant](../../img/ha-card.png)
+![Tarjetas de dispositivos en Home Assistant](../../img/link-ha-card.png)
 *Ambas cámaras del secador en el panel de Home Assistant: lecturas, inicio de secado y de almacenamiento, servicio.*
 
 !!! note
@@ -30,14 +30,14 @@ Abre el dispositivo en [portal.idryer.org](https://portal.idryer.org/) y busca e
 
 Los ajustes van directamente al dispositivo por la red local — el portal no los guarda.
 
-![Ventana de Home Assistant en el bloque «Integraciones» del portal](../../img/ha-portal-integration.png)
+![Ventana de Home Assistant en el bloque «Integraciones» del portal](../../img/link-ha-portal-integration.png)
 *Dirección del broker, puerto y la marca «Activado» — todo lo que el dispositivo necesita.*
 
 ## Paso 2. Encontrar el dispositivo en Home Assistant
 
 `Settings` → `Devices & services` → tarjeta **MQTT** → en la sección **Services** despliega el nodo del broker. Los dispositivos iDryer se ven bajo números de serie del tipo `DEVICE_*`.
 
-![Dispositivos iDryer en la página de la integración MQTT](../../img/ha-mqtt-devices.png)
+![Dispositivos iDryer en la página de la integración MQTT](../../img/link-ha-mqtt-devices.png)
 *Dispositivos bajo el nodo del broker; en el secador se ve el número de entidades.*
 
 Abre el dispositivo: HA ya muestra las lecturas y los elementos de control. Comprueba que los valores estén vivos — se actualizan junto con la telemetría del dispositivo.
@@ -194,7 +194,7 @@ views:
       icon_tap_action: *id005
 ```
 
-![Raw configuration editor con la disposición pegada](../../img/ha-raw-editor.png)
+![Raw configuration editor con la disposición pegada](../../img/link-ha-raw-editor.png)
 *La misma disposición en el editor de configuración del dashboard.*
 
 ### La segunda cámara

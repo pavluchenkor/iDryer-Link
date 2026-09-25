@@ -4,7 +4,7 @@ Le séchoir équipé du module Link se publie dans Home Assistant via **MQTT Dis
 
 Ci-dessous : l'activation de l'intégration, la vérification et une disposition de carte prête à l'emploi, pour que l'appareil ressemble à l'illustration et non à une liste d'entités.
 
-![Cartes des appareils dans Home Assistant](../../img/ha-card.png)
+![Cartes des appareils dans Home Assistant](../../img/link-ha-card.png)
 *Les deux chambres du séchoir sur le tableau de bord Home Assistant : relevés, lancement du séchage et du stockage, maintenance.*
 
 !!! note
@@ -30,14 +30,14 @@ Ouvrez l'appareil sur [portal.idryer.org](https://portal.idryer.org/) et trouvez
 
 Les paramètres sont transmis directement à l'appareil via le réseau local — le portail ne les conserve pas.
 
-![Fenêtre Home Assistant dans le bloc « Intégrations » du portail](../../img/ha-portal-integration.png)
+![Fenêtre Home Assistant dans le bloc « Intégrations » du portail](../../img/link-ha-portal-integration.png)
 *L'adresse du broker, le port et la case « Activé » — c'est tout ce dont l'appareil a besoin.*
 
 ## Étape 2. Trouver l'appareil dans Home Assistant
 
 `Settings` → `Devices & services` → carte **MQTT** → dans la section **Services**, développez le nœud du broker. Les appareils iDryer y figurent sous des numéros de série de la forme `DEVICE_*`.
 
-![Appareils iDryer sur la page de l'intégration MQTT](../../img/ha-mqtt-devices.png)
+![Appareils iDryer sur la page de l'intégration MQTT](../../img/link-ha-mqtt-devices.png)
 *Les appareils sous le nœud du broker ; pour le séchoir, le nombre d'entités est indiqué.*
 
 Ouvrez l'appareil : HA affiche déjà les relevés et les éléments de contrôle. Vérifiez que les valeurs sont actualisées — elles évoluent avec la télémétrie de l'appareil.
@@ -194,7 +194,7 @@ views:
       icon_tap_action: *id005
 ```
 
-![Raw configuration editor avec la disposition collée](../../img/ha-raw-editor.png)
+![Raw configuration editor avec la disposition collée](../../img/link-ha-raw-editor.png)
 *La même disposition dans l'éditeur de configuration du tableau de bord.*
 
 ### Deuxième chambre

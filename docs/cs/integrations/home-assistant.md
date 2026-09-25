@@ -4,7 +4,7 @@ Sušička s modulem Link se do Home Assistant publikuje přes **MQTT Discovery**
 
 Níže je zapnutí integrace, kontrola a hotové rozložení karty, aby zařízení vypadalo jako na obrázku, a ne jako seznam entit.
 
-![Karty zařízení v Home Assistant](../../img/ha-card.png)
+![Karty zařízení v Home Assistant](../../img/link-ha-card.png)
 *Obě komory sušičky na panelu Home Assistant: hodnoty, spuštění sušení a skladování, servis.*
 
 !!! note
@@ -30,14 +30,14 @@ Otevřete zařízení na [portal.idryer.org](https://portal.idryer.org/) a najd�
 
 Nastavení jde přímo do zařízení po místní síti — portál je neukládá.
 
-![Okno Home Assistant v bloku „Integrace“ na portálu](../../img/ha-portal-integration.png)
+![Okno Home Assistant v bloku „Integrace“ na portálu](../../img/link-ha-portal-integration.png)
 *Adresa brokeru, port a příznak „Zapnuto“ — vše, co zařízení potřebuje.*
 
 ## Krok 2. Najít zařízení v Home Assistant
 
 `Settings` → `Devices & services` → karta **MQTT** → v sekci **Services** rozbalte uzel brokeru. Zařízení iDryer jsou vidět pod sériovými čísly ve tvaru `DEVICE_*`.
 
-![Zařízení iDryer na stránce integrace MQTT](../../img/ha-mqtt-devices.png)
+![Zařízení iDryer na stránce integrace MQTT](../../img/link-ha-mqtt-devices.png)
 *Zařízení pod uzlem brokeru; u sušičky je vidět počet entit.*
 
 Otevřete zařízení: HA už ukazuje hodnoty a ovládací prvky. Zkontrolujte, že jsou hodnoty živé — aktualizují se spolu s telemetrií zařízení.
@@ -194,7 +194,7 @@ views:
       icon_tap_action: *id005
 ```
 
-![Raw configuration editor s vloženým rozložením](../../img/ha-raw-editor.png)
+![Raw configuration editor s vloženým rozložením](../../img/link-ha-raw-editor.png)
 *Totéž rozložení v editoru konfigurace dashboardu.*
 
 ### Druhá komora

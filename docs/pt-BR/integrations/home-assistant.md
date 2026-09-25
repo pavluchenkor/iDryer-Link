@@ -4,7 +4,7 @@ A secadora com o módulo Link se publica no Home Assistant via **MQTT Discovery*
 
 Abaixo: ativação da integração, verificação e um layout de cartão pronto, para que o aparelho fique como na imagem e não como uma lista de entidades.
 
-![Cartões dos aparelhos no Home Assistant](../../img/ha-card.png)
+![Cartões dos aparelhos no Home Assistant](../../img/link-ha-card.png)
 *As duas câmaras da secadora no painel do Home Assistant: leituras, início da secagem e do armazenamento, manutenção.*
 
 !!! note
@@ -30,14 +30,14 @@ Abra o dispositivo em [portal.idryer.org](https://portal.idryer.org/) e encontre
 
 As configurações vão direto para o aparelho pela rede local — o portal não as armazena.
 
-![A janela do Home Assistant no bloco «Integrações» do portal](../../img/ha-portal-integration.png)
+![A janela do Home Assistant no bloco «Integrações» do portal](../../img/link-ha-portal-integration.png)
 *O endereço do broker, a porta e a marca «Ativado» — tudo o que o aparelho precisa.*
 
 ## Passo 2. Encontrar o dispositivo no Home Assistant
 
 `Settings` → `Devices & services` → o cartão **MQTT** → na seção **Services** expanda o nó do broker. Os aparelhos iDryer aparecem sob números de série no formato `DEVICE_*`.
 
-![Aparelhos iDryer na página da integração MQTT](../../img/ha-mqtt-devices.png)
+![Aparelhos iDryer na página da integração MQTT](../../img/link-ha-mqtt-devices.png)
 *Dispositivos sob o nó do broker; na secadora aparece a quantidade de entidades.*
 
 Abra o dispositivo: o HA já mostra as leituras e os controles. Verifique se os valores estão vivos — eles se atualizam junto com a telemetria do aparelho.
@@ -194,7 +194,7 @@ views:
       icon_tap_action: *id005
 ```
 
-![Raw configuration editor com o layout colado](../../img/ha-raw-editor.png)
+![Raw configuration editor com o layout colado](../../img/link-ha-raw-editor.png)
 *O mesmo layout no editor de configuração do painel.*
 
 ### Segunda câmara

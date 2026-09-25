@@ -4,7 +4,7 @@ A dryer with a Link module publishes itself to Home Assistant via **MQTT Discove
 
 Below: enabling the integration, verification and a ready-made card layout, so that the device looks like the picture rather than a list of entities.
 
-![Device cards in Home Assistant](../../img/ha-card.png)
+![Device cards in Home Assistant](../../img/link-ha-card.png)
 *Both dryer chambers on the Home Assistant panel: readings, drying and storage start, service.*
 
 !!! note
@@ -30,14 +30,14 @@ Open the device at [portal.idryer.org](https://portal.idryer.org/) and find the 
 
 The settings go straight to the device over the local network — the portal does not store them.
 
-![The Home Assistant window in the "Integrations" block on the portal](../../img/ha-portal-integration.png)
+![The Home Assistant window in the "Integrations" block on the portal](../../img/link-ha-portal-integration.png)
 *The broker address, port and the "Enabled" flag — everything the device needs.*
 
 ## Step 2. Find the device in Home Assistant
 
 `Settings` → `Devices & services` → the **MQTT** card → in the **Services** section expand the broker node. iDryer devices are listed under serial numbers of the form `DEVICE_*`.
 
-![iDryer devices on the MQTT integration page](../../img/ha-mqtt-devices.png)
+![iDryer devices on the MQTT integration page](../../img/link-ha-mqtt-devices.png)
 *Devices under the broker node; the dryer shows its entity count.*
 
 Open the device: HA already shows the readings and controls. Check that the values are live — they update together with the device telemetry.
@@ -194,7 +194,7 @@ views:
       icon_tap_action: *id005
 ```
 
-![Raw configuration editor with the layout pasted in](../../img/ha-raw-editor.png)
+![Raw configuration editor with the layout pasted in](../../img/link-ha-raw-editor.png)
 *The same layout in the dashboard configuration editor.*
 
 ### The second chamber
