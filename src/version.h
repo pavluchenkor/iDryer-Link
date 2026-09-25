@@ -19,8 +19,9 @@
 #undef STR
 #undef STR_HELPER
 #else
-// Fallback если файл еще не скопирован
-#define VERSION_MAJOR 1
+// Fallback если файл еще не скопирован: держать равным MAJOR контроллера,
+// иначе сборка без скопированного меню уедет с чужим номером версии.
+#define VERSION_MAJOR 3
 #endif
 
 // Собственные версии LINK
